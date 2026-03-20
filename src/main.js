@@ -15,7 +15,7 @@ const renderer = new THREE.WebGLRenderer({
   antialias: true,
   alpha: true,
 });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -40,7 +40,20 @@ const gravity = new THREE.Vector3(0, -19, 0);
 const upVector = new THREE.Vector3(0, 1, 0);
 const tempVecA = new THREE.Vector3();
 const tempVecB = new THREE.Vector3();
+const tempVecC = new THREE.Vector3();
+const tempVecD = new THREE.Vector3();
+const tempVecE = new THREE.Vector3();
+const tempVecF = new THREE.Vector3();
+const tempVecG = new THREE.Vector3();
+const tempVecH = new THREE.Vector3();
+const tempVecI = new THREE.Vector3();
+const tempVecJ = new THREE.Vector3();
+const tempVecK = new THREE.Vector3();
+const tempVecL = new THREE.Vector3();
+const cameraCenterRay = new THREE.Vector2(0, 0);
 const aimPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -0.2);
+const phoneAimCenter = new THREE.Vector3();
+const smokeSpawnOffset = new THREE.Vector3(0, 0, 0);
 
 const input = {
   forward: false,
@@ -83,6 +96,20 @@ const projectiles = [];
 const splats = [];
 const smokePuffs = [];
 const dustPuffs = [];
+const smokeConfig = {
+  spawnInterval: 0.11,
+  maxPuffs: 22,
+};
+let smokeSpawnTimer = 0;
+
+const projectileMaterial = new THREE.MeshStandardMaterial({
+  color: 0x5b3218,
+  roughness: 1,
+});
+const projectileMainGeometry = new THREE.SphereGeometry(0.12, 12, 12);
+const projectileNuggetAGeometry = new THREE.SphereGeometry(0.06, 10, 10);
+const projectileNuggetBGeometry = new THREE.SphereGeometry(0.05, 10, 10);
+const smokeGeometry = new THREE.SphereGeometry(0.08, 8, 8);
 
 const phoneRig = createPhone();
 const aimMarker = createAimMarker();
@@ -115,7 +142,7 @@ function setupLights() {
   const sun = new THREE.DirectionalLight(0xfff0c9, 2.5);
   sun.position.set(10, 18, 8);
   sun.castShadow = true;
-  sun.shadow.mapSize.set(2048, 2048);
+  sun.shadow.mapSize.set(1024, 1024);
   sun.shadow.camera.left = -22;
   sun.shadow.camera.right = 22;
   sun.shadow.camera.top = 22;
@@ -700,34 +727,30 @@ function shootPoop() {
     return;
   }
 
-  const start = hero.buttAnchor.getWorldPosition(new THREE.Vector3());
-  let target = aimMarker.position.clone();
-  const phoneAimCenter = world.phoneCenter.clone();
+  const start = hero.buttAnchor.getWorldPosition(tempVecA);
+  const target = tempVecB.copy(aimMarker.position);
+  phoneAimCenter.copy(world.phoneCenter);
   phoneAimCenter.y = getPhoneTopY() + 0.03;
   if (target.distanceTo(phoneAimCenter) < 7) {
-    const localTarget = phoneRig.worldToLocal(target.clone());
+    const localTarget = phoneRig.worldToLocal(tempVecC.copy(target));
     localTarget.x = THREE.MathUtils.clamp(localTarget.x, -phoneMetrics.width * 0.42, phoneMetrics.width * 0.42);
     localTarget.z = THREE.MathUtils.clamp(localTarget.z, -phoneMetrics.length * 0.42, phoneMetrics.length * 0.42);
     localTarget.y = phoneMetrics.thickness / 2 + 0.03;
-    target = phoneRig.localToWorld(localTarget);
+    phoneRig.localToWorld(localTarget);
+    target.copy(localTarget);
   }
 
   const flightTime = 0.58;
-  const velocity = target
-    .clone()
+  const velocity = tempVecD
+    .copy(target)
     .sub(start)
-    .sub(gravity.clone().multiplyScalar(0.5 * flightTime * flightTime))
+    .addScaledVector(gravity, -0.5 * flightTime * flightTime)
     .divideScalar(flightTime);
 
-  const material = new THREE.MeshStandardMaterial({
-    color: 0x5b3218,
-    roughness: 1,
-  });
-
   const projectile = new THREE.Group();
-  const mainBlob = new THREE.Mesh(new THREE.SphereGeometry(0.12, 12, 12), material);
-  const nuggetA = new THREE.Mesh(new THREE.SphereGeometry(0.06, 10, 10), material);
-  const nuggetB = new THREE.Mesh(new THREE.SphereGeometry(0.05, 10, 10), material);
+  const mainBlob = new THREE.Mesh(projectileMainGeometry, projectileMaterial);
+  const nuggetA = new THREE.Mesh(projectileNuggetAGeometry, projectileMaterial);
+  const nuggetB = new THREE.Mesh(projectileNuggetBGeometry, projectileMaterial);
   nuggetA.position.set(0.09, 0.03, 0);
   nuggetB.position.set(-0.08, -0.02, 0.03);
   projectile.add(mainBlob, nuggetA, nuggetB);
@@ -736,9 +759,9 @@ function shootPoop() {
 
   projectiles.push({
     group: projectile,
-    velocity,
+    velocity: velocity.clone(),
     age: 0,
-    target,
+    target: target.clone(),
   });
 
   state.cooldown = 0.52;
@@ -754,15 +777,15 @@ function getMoveIntent() {
   const axisZ = Number(input.forward) - Number(input.backward);
 
   if (axisX === 0 && axisZ === 0) {
-    return new THREE.Vector3();
+    return tempVecE.set(0, 0, 0);
   }
 
-  const cameraForward = new THREE.Vector3(
+  const cameraForward = tempVecE.set(
     Math.sin(state.cameraYaw),
     0,
     Math.cos(state.cameraYaw),
   );
-  const cameraRight = new THREE.Vector3(-cameraForward.z, 0, cameraForward.x);
+  const cameraRight = tempVecF.set(-cameraForward.z, 0, cameraForward.x);
 
   return cameraForward.multiplyScalar(axisZ).add(cameraRight.multiplyScalar(axisX)).normalize();
 }
@@ -781,7 +804,7 @@ function updatePlayer(delta) {
     state.walkCycle += delta * 10.5;
     state.playerYaw = dampAngle(state.playerYaw, Math.atan2(moveIntent.x, moveIntent.z), delta * 14);
 
-    const nextPosition = state.playerPosition.clone().addScaledVector(moveIntent, speed * delta);
+    const nextPosition = tempVecG.copy(state.playerPosition).addScaledVector(moveIntent, speed * delta);
     keepInsideArena(nextPosition);
     if (state.playerPosition.y < 0.42) {
       resolvePhoneCollision(nextPosition);
@@ -831,7 +854,7 @@ function keepInsideArena(position) {
 }
 
 function resolvePhoneCollision(position) {
-  const local = phoneRig.worldToLocal(position.clone());
+  const local = phoneRig.worldToLocal(tempVecH.copy(position));
   const collisionX = phoneMetrics.width * 0.7;
   const collisionZ = phoneMetrics.length * 0.72;
 
@@ -852,24 +875,24 @@ function resolvePhoneCollision(position) {
 }
 
 function updateCamera(delta) {
-  const flatForward = new THREE.Vector3(
+  const flatForward = tempVecI.set(
     Math.sin(state.cameraYaw),
     0,
     Math.cos(state.cameraYaw),
   ).normalize();
-  const cameraRight = new THREE.Vector3(-flatForward.z, 0, flatForward.x);
-  const lookDirection = new THREE.Vector3(
+  const cameraRight = tempVecJ.set(-flatForward.z, 0, flatForward.x);
+  const lookDirection = tempVecK.set(
     Math.sin(state.cameraYaw) * Math.cos(state.cameraPitch),
     Math.sin(state.cameraPitch),
     Math.cos(state.cameraYaw) * Math.cos(state.cameraPitch),
   ).normalize();
-  const anchor = state.playerPosition.clone().add(new THREE.Vector3(0, 1.55, 0));
-  const desiredPosition = anchor
-    .clone()
-    .sub(flatForward.clone().multiplyScalar(5.6))
-    .add(cameraRight.multiplyScalar(0.95))
-    .add(new THREE.Vector3(0, 1.9 - state.cameraPitch * 1.7, 0));
-  const lookAt = anchor.clone().add(lookDirection.multiplyScalar(12));
+  const anchor = tempVecL.copy(state.playerPosition).add(tempVecA.set(0, 1.55, 0));
+  const desiredPosition = tempVecB
+    .copy(anchor)
+    .addScaledVector(flatForward, -5.6)
+    .addScaledVector(cameraRight, 0.95)
+    .add(tempVecC.set(0, 1.9 - state.cameraPitch * 1.7, 0));
+  const lookAt = tempVecD.copy(anchor).addScaledVector(lookDirection, 12);
 
   camera.position.lerp(desiredPosition, 1 - Math.exp(-delta * 13));
   camera.lookAt(lookAt);
@@ -877,28 +900,29 @@ function updateCamera(delta) {
 
 function updateAimMarker() {
   aimPlane.constant = -(getPhoneTopY() + 0.03);
-  raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+  raycaster.setFromCamera(cameraCenterRay, camera);
 
-  const targetPoint = new THREE.Vector3();
+  const targetPoint = tempVecE;
   if (!raycaster.ray.intersectPlane(aimPlane, targetPoint)) {
-    targetPoint.copy(state.playerPosition).add(new THREE.Vector3(0, getPhoneTopY() + 0.03, -8));
+    targetPoint.copy(state.playerPosition).add(tempVecF.set(0, getPhoneTopY() + 0.03, -8));
   }
 
-  const playerChest = state.playerPosition.clone().setY(1.2);
+  const playerChest = tempVecG.copy(state.playerPosition).setY(1.2);
   const aimOffset = targetPoint.sub(playerChest);
   const aimDistance = THREE.MathUtils.clamp(aimOffset.length(), 2.8, 18);
   aimOffset.setLength(aimDistance);
   targetPoint.copy(playerChest.add(aimOffset));
   targetPoint.y = getPhoneTopY() + 0.03;
 
-  const phoneAimCenter = world.phoneCenter.clone();
+  phoneAimCenter.copy(world.phoneCenter);
   phoneAimCenter.y = getPhoneTopY() + 0.03;
   if (targetPoint.distanceTo(phoneAimCenter) < 3.6) {
-    const localTarget = phoneRig.worldToLocal(targetPoint.clone());
+    const localTarget = phoneRig.worldToLocal(tempVecH.copy(targetPoint));
     localTarget.x = THREE.MathUtils.clamp(localTarget.x, -phoneMetrics.width * 0.42, phoneMetrics.width * 0.42);
     localTarget.z = THREE.MathUtils.clamp(localTarget.z, -phoneMetrics.length * 0.42, phoneMetrics.length * 0.42);
     localTarget.y = phoneMetrics.thickness / 2 + 0.03;
-    targetPoint.copy(phoneRig.localToWorld(localTarget));
+    phoneRig.localToWorld(localTarget);
+    targetPoint.copy(localTarget);
   }
 
   aimMarker.position.copy(targetPoint);
@@ -958,7 +982,7 @@ function destroyProjectile(index) {
 }
 
 function isPointOnPhone(point) {
-  const local = phoneRig.worldToLocal(point.clone());
+  const local = phoneRig.worldToLocal(tempVecI.copy(point));
   return (
     Math.abs(local.x) <= phoneMetrics.width * 0.46 &&
     Math.abs(local.z) <= phoneMetrics.length * 0.46
@@ -1061,12 +1085,27 @@ function triggerGameOver() {
 }
 
 function updateHud() {
-  hitsEl.textContent = String(state.hits);
-  comboEl.textContent = `x${state.combo}`;
-  scoreEl.textContent = String(state.score);
+  const nextHits = String(state.hits);
+  if (hitsEl.textContent !== nextHits) {
+    hitsEl.textContent = nextHits;
+  }
+
+  const nextCombo = `x${state.combo}`;
+  if (comboEl.textContent !== nextCombo) {
+    comboEl.textContent = nextCombo;
+  }
+
+  const nextScore = String(state.score);
+  if (scoreEl.textContent !== nextScore) {
+    scoreEl.textContent = nextScore;
+  }
+
   const hemorrhoidPercent = Math.round(state.hemorrhoids);
-  meterTextEl.textContent = `${hemorrhoidPercent}%`;
-  meterFillEl.style.width = `${hemorrhoidPercent}%`;
+  const nextMeterText = `${hemorrhoidPercent}%`;
+  if (meterTextEl.textContent !== nextMeterText) {
+    meterTextEl.textContent = nextMeterText;
+    meterFillEl.style.width = nextMeterText;
+  }
 }
 
 function setMessage(text) {
@@ -1075,22 +1114,27 @@ function setMessage(text) {
 }
 
 function updateSmoke(delta) {
-  if (Math.random() < 0.4) {
+  smokeSpawnTimer = Math.min(
+    smokeSpawnTimer + delta,
+    smokeConfig.spawnInterval * (smokeConfig.maxPuffs + 1),
+  );
+  while (smokeSpawnTimer >= smokeConfig.spawnInterval && smokePuffs.length < smokeConfig.maxPuffs) {
+    smokeSpawnTimer -= smokeConfig.spawnInterval;
     const puff = new THREE.Mesh(
-      new THREE.SphereGeometry(0.08, 8, 8),
+      smokeGeometry,
       new THREE.MeshBasicMaterial({
         color: 0xd5d0c5,
         transparent: true,
         opacity: 0.45,
       }),
     );
-    puff.position.copy(hero.cigaretteTip.getWorldPosition(new THREE.Vector3()));
+    puff.position.copy(hero.cigaretteTip.getWorldPosition(tempVecJ)).add(smokeSpawnOffset);
     puff.userData = {
-      velocity: new THREE.Vector3(
+      velocity: tempVecK.set(
         THREE.MathUtils.randFloat(-0.1, 0.12),
         THREE.MathUtils.randFloat(0.24, 0.38),
         THREE.MathUtils.randFloat(-0.08, 0.08),
-      ),
+      ).clone(),
       life: 0,
       maxLife: THREE.MathUtils.randFloat(1.5, 2.3),
     };
