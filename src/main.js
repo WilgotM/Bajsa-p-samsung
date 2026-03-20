@@ -78,6 +78,12 @@ const input = {
   left: false,
   right: false,
 };
+const poopHoldState = {
+  pointerId: null,
+  isPointerDown: false,
+  holdTime: 0,
+  started: false,
+};
 
 const phoneMetrics = {
   width: 3.1,
@@ -86,13 +92,32 @@ const phoneMetrics = {
 };
 
 const poopConfig = {
-  standX: phoneMetrics.width * 0.47,
-  standZ: phoneMetrics.length * 0.47,
+  standX: phoneMetrics.width * 0.49,
+  standZ: phoneMetrics.length * 0.49,
   targetX: phoneMetrics.width * 0.42,
   targetZ: phoneMetrics.length * 0.42,
   releaseDuration: 0.24,
   stringSegments: 6,
+  holdThreshold: 0.18,
+  chainRadius: 0.12,
+  chainSegmentLength: 0.13,
+  chainSpawnInterval: 0.045,
+  chainConstraintIterations: 7,
+  chainMaxSegments: 78,
+  maxRopes: 8,
+  tubeSides: 14,
+  tubeOverlayScale: 1.12,
+  backwardFlowSpeed: 1.75,
+  backwardFlowFalloff: 0.82,
 };
+const strikeConfig = {
+  duration: 0.34,
+  cooldown: 0.42,
+  range: 3.4,
+  assistRange: 11,
+  playerTurnSnap: 0.38,
+};
+const standingTargetPosition = new THREE.Vector3(36.4, 0, -1.8);
 
 const world = {
   arenaRadius: 66,
@@ -100,7 +125,7 @@ const world = {
   legacyMapHalfSize: 26,
   biomeRadius: 15,
   dustRadius: 54,
-  phoneCenter: new THREE.Vector3(0, phoneMetrics.thickness / 2 + 0.02, -6.4),
+  phoneCenter: new THREE.Vector3(0, phoneMetrics.thickness / 2 + 0.02, 0),
   forestCenter: new THREE.Vector3(0, 0, -46),
   desertCenter: new THREE.Vector3(47, 0, -6),
   snowCenter: new THREE.Vector3(-47, 0, -6),
@@ -111,7 +136,8 @@ const heroMetrics = {
   scale: 0.34,
   moveSpeed: 6.5,
   jumpVelocity: 5.5,
-  phoneCollisionHeight: 0.26,
+  phoneCollisionHeight: 0.14,
+  phoneJumpAssistHeight: 0.22,
   worldCollisionHeight: 1.05,
   cameraAnchorHeight: 0.58,
   cameraDistance: 4.5,
@@ -139,9 +165,12 @@ const state = {
   message: "",
   isOnPhone: false,
   poopAnimation: 0,
+  strikeAnimation: 0,
+  strikeResolved: true,
 };
 
 const projectiles = [];
+const poopRopes = [];
 const splats = [];
 const smokePuffs = [];
 const dustPuffs = [];
@@ -151,6 +180,7 @@ const smokeConfig = {
   maxPuffs: 22,
 };
 let smokeSpawnTimer = 0;
+let activePoopRope = null;
 
 const projectileMainGeometry = new THREE.CapsuleGeometry(0.11, 0.16, 5, 10);
 const projectileNuggetAGeometry = new THREE.SphereGeometry(0.08, 10, 10);
@@ -162,6 +192,17 @@ const splatFiberGeometry = new THREE.SphereGeometry(0.025, 7, 7);
 const smokeGeometry = new THREE.SphereGeometry(0.08, 8, 8);
 const impactRingGeometry = new THREE.RingGeometry(0.12, 0.28, 28);
 const impactSparkGeometry = new THREE.SphereGeometry(0.06, 8, 8);
+const poopTubeMaterial = createPoopMaterial(0x5c3014, {
+  roughness: 0.4,
+  clearcoat: 0.3,
+  clearcoatRoughness: 0.2,
+});
+const poopTubeSlimeMaterial = createPoopMaterial(0x7a4720, {
+  roughness: 0.22,
+  clearcoat: 0.5,
+  clearcoatRoughness: 0.08,
+  opacity: 0.52,
+});
 
 const phoneRig = createPhone();
 const aimMarker = createAimMarker();
@@ -184,8 +225,13 @@ window.addEventListener("keydown", onKeyDown);
 window.addEventListener("keyup", onKeyUp);
 window.addEventListener("pointerlockchange", onPointerLockChange);
 window.addEventListener("pointerlockerror", onPointerLockError);
+window.addEventListener("pointerup", onPointerUp);
+window.addEventListener("pointercancel", onPointerCancel);
+window.addEventListener("blur", onWindowBlur);
+document.addEventListener("visibilitychange", onVisibilityChange);
 canvas.addEventListener("pointerdown", onPointerDown);
 canvas.addEventListener("pointermove", onPointerMove);
+canvas.addEventListener("pointerleave", onPointerLeave);
 
 animate();
 
@@ -282,16 +328,7 @@ function setupWorld() {
   grassGlow.position.set(world.phoneCenter.x, 0.012, world.phoneCenter.z);
   scene.add(grassGlow);
 
-  const curb = new THREE.Mesh(
-    new THREE.TorusGeometry(9.8, 0.3, 14, 80),
-    new THREE.MeshStandardMaterial({
-      color: 0x9d907f,
-      roughness: 0.9,
-    }),
-  );
-  curb.rotation.x = Math.PI / 2;
-  curb.position.y = 0.02;
-  scene.add(curb);
+
 
   addRoadSegment({
     position: new THREE.Vector3(0, 0, -39.5),
@@ -1932,6 +1969,7 @@ function buildHero() {
   const rightLeg = new THREE.Group();
   const buttAnchor = new THREE.Object3D();
   const cigaretteTip = new THREE.Object3D();
+  const strikeAnchor = new THREE.Object3D();
 
   const coatMaterial = new THREE.MeshStandardMaterial({
     color: 0x5e6d59,
@@ -2096,6 +2134,8 @@ function buildHero() {
   rightArm.add(ember);
   cigaretteTip.position.copy(ember.position);
   rightArm.add(cigaretteTip);
+  strikeAnchor.position.set(0.3, -0.68, 0.33);
+  rightArm.add(strikeAnchor);
 
   const leftUpperLeg = new THREE.Mesh(
     new THREE.CylinderGeometry(0.14, 0.16, 0.86, 12),
@@ -2132,6 +2172,7 @@ function buildHero() {
     rightLeg,
     buttAnchor,
     cigaretteTip,
+    strikeAnchor,
   };
 }
 
@@ -2249,19 +2290,38 @@ function createAimMarker() {
 }
 
 function createDangerRing() {
-  const ring = new THREE.Mesh(
-    new THREE.RingGeometry(4.6, 6.8, 64),
-    new THREE.MeshBasicMaterial({
-      color: 0xffd056,
-      transparent: true,
-      opacity: 0.18,
-      side: THREE.DoubleSide,
-    }),
+  const group = new THREE.Group();
+  group.position.copy(world.phoneCenter);
+  group.position.y = 0.065;
+
+  const outline = new THREE.Mesh(
+    new THREE.TorusGeometry(9.2, 0.15, 32, 128),
+    new THREE.MeshStandardMaterial({
+      color: 0xffea00,
+      emissive: 0xffb300,
+      emissiveIntensity: 0.8,
+      roughness: 0.2,
+      metalness: 0.1
+    })
   );
-  ring.rotation.x = -Math.PI / 2;
-  ring.position.copy(world.phoneCenter);
-  ring.position.y = 0.025;
-  return ring;
+  outline.rotation.x = -Math.PI / 2;
+
+  const fill = new THREE.Mesh(
+    new THREE.CircleGeometry(9.2, 128),
+    new THREE.MeshBasicMaterial({
+      color: 0xffea00, // Saturated yellow to prevent looking white
+      transparent: true,
+      blending: THREE.AdditiveBlending, // Gives a stronger glowing neon look
+      opacity: 0.25,
+      side: THREE.DoubleSide,
+      depthWrite: false
+    })
+  );
+  fill.rotation.x = -Math.PI / 2;
+
+  group.add(outline, fill);
+  group.userData = { fill, outline };
+  return group;
 }
 
 function createStandingTarget() {
@@ -2270,7 +2330,7 @@ function createStandingTarget() {
   texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
 
   const root = new THREE.Group();
-  root.position.set(world.phoneCenter.x + 2.5, 0, world.phoneCenter.z - 4.9);
+  root.position.copy(standingTargetPosition);
 
   const baseShadow = new THREE.Mesh(
     new THREE.CircleGeometry(1.18, 28),
@@ -2335,6 +2395,31 @@ function createStandingTarget() {
   glow.position.set(0, 0.1, -0.05);
   visualGroup.add(glow);
 
+  const beacon = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.22, 0.42, 4.2, 18, 1, true),
+    new THREE.MeshBasicMaterial({
+      color: 0xffd37a,
+      transparent: true,
+      opacity: 0.18,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    }),
+  );
+  beacon.position.set(0, 2.2, 0);
+  root.add(beacon);
+
+  const beaconRing = new THREE.Mesh(
+    new THREE.TorusGeometry(0.68, 0.08, 12, 32),
+    new THREE.MeshBasicMaterial({
+      color: 0xfff1bb,
+      transparent: true,
+      opacity: 0.92,
+      depthWrite: false,
+    }),
+  );
+  beaconRing.position.set(0, 4.15, 0);
+  root.add(beaconRing);
+
   const planeMaterial = new THREE.MeshStandardMaterial({
     map: texture,
     transparent: true,
@@ -2373,6 +2458,8 @@ function createStandingTarget() {
     visualGroup,
     hitMesh,
     glow,
+    beacon,
+    beaconRing,
     planeMaterial,
     baseShadow,
     state: {
@@ -2411,7 +2498,9 @@ function createStainMaterial(color, overrides = {}) {
 }
 
 function resetRound(initial = false) {
+  stopPoopHold();
   clearProjectiles();
+  clearPoopRopes();
   clearSplats();
   clearImpactBursts();
 
@@ -2432,6 +2521,13 @@ function resetRound(initial = false) {
   state.resetTimer = 0;
   state.isOnPhone = false;
   state.poopAnimation = 0;
+  state.strikeAnimation = 0;
+  state.strikeResolved = true;
+  poopHoldState.pointerId = null;
+  poopHoldState.isPointerDown = false;
+  poopHoldState.holdTime = 0;
+  poopHoldState.started = false;
+  activePoopRope = null;
   standingTarget.state.floatTime = Math.random() * Math.PI * 2;
   standingTarget.state.wobble = 0;
   standingTarget.state.wobbleVelocity = 0;
@@ -2448,8 +2544,8 @@ function resetRound(initial = false) {
   updateHud();
   setMessage(
     initial
-      ? "Klicka i scenen för att låsa musen. Kliv upp på telefonen, bajsa och träffa den uppställda gubben för att sänka hemorojdrisken."
-      : "Ny runda. Kliv upp på telefonen och träffa gubben när trycket blir för högt.",
+      ? "Klicka i scenen for att lasa musen. Hall vanster mus nere pa telefonen for att borja bajsa, och tryck F om gubben i oknen behover stryk."
+      : "Ny runda. Hall vanster mus nere pa telefonen for att bygga en korv, och kliv av direkt om du vill bryta.",
   );
 }
 
@@ -2481,7 +2577,7 @@ function onKeyDown(event) {
     }
   }
   if (event.code === "KeyF") {
-    shootPoop();
+    performStrike();
   }
   if (event.code === "KeyR" && state.gameOver) {
     resetRound();
@@ -2513,7 +2609,15 @@ function onPointerDown(event) {
     return;
   }
 
-  shootPoop();
+  if (!state.isOnPhone) {
+    setMessage("Kliv upp pa telefonen och hall inne musen for att borja pressa.");
+    return;
+  }
+
+  poopHoldState.pointerId = event.pointerId;
+  poopHoldState.isPointerDown = true;
+  poopHoldState.holdTime = 0;
+  poopHoldState.started = false;
 }
 
 function onPointerMove(event) {
@@ -2527,14 +2631,53 @@ function onPointerMove(event) {
   state.cameraPitch = THREE.MathUtils.clamp(state.cameraPitch - nextY * 0.0038, -0.65, 0.22);
 }
 
+function onPointerUp(event) {
+  if (poopHoldState.pointerId !== null && event.pointerId !== poopHoldState.pointerId) {
+    return;
+  }
+
+  stopPoopHold();
+}
+
+function onPointerCancel(event) {
+  if (poopHoldState.pointerId !== null && event.pointerId !== poopHoldState.pointerId) {
+    return;
+  }
+
+  stopPoopHold();
+}
+
+function onPointerLeave(event) {
+  if (!poopHoldState.isPointerDown) {
+    return;
+  }
+
+  if (poopHoldState.pointerId !== null && event.pointerId !== poopHoldState.pointerId) {
+    return;
+  }
+
+  stopPoopHold();
+}
+
+function onWindowBlur() {
+  stopPoopHold();
+}
+
+function onVisibilityChange() {
+  if (document.hidden) {
+    stopPoopHold();
+  }
+}
+
 function onPointerLockChange() {
   document.body.classList.toggle("pointer-locked", isPointerLocked());
 
   if (isPointerLocked()) {
-    setMessage("Musen är låst. Vrid runt med musen, WASD går runt.");
+    setMessage("Musen ar last. Vrid runt med musen, och hall vanster mus nere pa telefonen for att borja.");
     return;
   }
 
+  stopPoopHold();
   setMessage("Klicka i scenen för att låsa musen igen.");
 }
 
@@ -2546,42 +2689,116 @@ function isPointerLocked() {
   return document.pointerLockElement === canvas;
 }
 
-function shootPoop() {
-  if (state.gameOver || state.cooldown > 0) {
+function stopPoopHold(reason = "release") {
+  const shouldReportPhoneExit = reason === "left-phone" && poopHoldState.started;
+
+  poopHoldState.pointerId = null;
+  poopHoldState.isPointerDown = false;
+  poopHoldState.holdTime = 0;
+  poopHoldState.started = false;
+
+  if (activePoopRope) {
+    activePoopRope.isGrowing = false;
+    activePoopRope = null;
+  }
+
+  if (shouldReportPhoneExit) {
+    setMessage("Korven slutade vaxa direkt nar du lamnade telefonen.");
+  }
+}
+
+function updatePoopHold(delta) {
+  if (!poopHoldState.isPointerDown) {
+    return;
+  }
+
+  if (state.gameOver || !isPointerLocked()) {
+    stopPoopHold();
     return;
   }
 
   if (!state.isOnPhone) {
-    setMessage("Du måste stå på telefonen för att kunna bajsa. Kliv upp på skärmen först.");
+    stopPoopHold("left-phone");
     return;
   }
 
-  const start = hero.buttAnchor.getWorldPosition(tempVecA);
-  const target = tempVecB.copy(aimState.point);
+  poopHoldState.holdTime += delta;
+  if (poopHoldState.started || poopHoldState.holdTime < poopConfig.holdThreshold) {
+    return;
+  }
 
-  const flightTime = THREE.MathUtils.randFloat(0.28, 0.38);
-  const velocity = tempVecD
-    .copy(target)
-    .sub(start)
-    .addScaledVector(gravity, -0.5 * flightTime * flightTime)
-    .divideScalar(flightTime);
+  poopHoldState.started = true;
+  activePoopRope = createPoopRope(hero.buttAnchor.getWorldPosition(tempVecA).clone());
+  poopRopes.push(activePoopRope);
+  trimPoopRopes();
+  setMessage("Trycket slapper. Hall kvar sa vaxer bajskorven.");
+}
 
-  const projectile = createPoopProjectile(start);
+function performStrike() {
+  if (state.gameOver || state.cooldown > 0) {
+    return;
+  }
 
-  projectiles.push({
-    ...projectile,
-    velocity: velocity.clone(),
-    age: 0,
-    target: target.clone(),
-  });
+  tempVecH.copy(standingTarget.root.position).sub(state.playerPosition).setY(0);
+  if (tempVecH.lengthSq() > 0.01) {
+    const strikeYaw = Math.atan2(tempVecH.x, tempVecH.z);
+    state.playerYaw = dampAngle(state.playerYaw, strikeYaw, strikeConfig.playerTurnSnap);
+    state.cameraYaw = dampAngle(state.cameraYaw, strikeYaw, strikeConfig.playerTurnSnap * 0.82);
+  }
 
-  state.cooldown = 0.36;
-  state.poopAnimation = 0.34;
-  setMessage(
-    aimState.mode === "target"
-      ? "Klockren dask på väg. Håll honom i schack."
-      : "Pressa. Nu ser man hela utsläppet från rumpan.",
-  );
+  state.cooldown = strikeConfig.cooldown;
+  state.strikeAnimation = strikeConfig.duration;
+  state.strikeResolved = false;
+  setMessage("Du laddar upp en rak höger mot öken-gubben.");
+}
+
+function getStrikeImpact() {
+  const strikeOrigin = hero.strikeAnchor.getWorldPosition(tempVecA);
+  const targetCenter = standingTarget.swayPivot.getWorldPosition(tempVecB);
+  const toTarget = tempVecC.copy(targetCenter).sub(strikeOrigin);
+  const distance = toTarget.length();
+  if (distance > strikeConfig.range) {
+    return null;
+  }
+
+  const impactPoint = tempVecF.copy(targetCenter);
+  impactPoint.x += THREE.MathUtils.clamp(toTarget.x * 0.12, -0.18, 0.18);
+  impactPoint.y += 0.08;
+  impactPoint.z += THREE.MathUtils.clamp(toTarget.z * 0.12, -0.18, 0.18);
+  const impactVelocity = tempVecG
+    .copy(toTarget)
+    .setY(0)
+    .normalize()
+    .multiplyScalar(18 + state.moveAmount * 5);
+
+  return {
+    impactPoint: impactPoint.clone(),
+    impactVelocity: impactVelocity.clone(),
+    distance,
+  };
+}
+
+function updateStrike(delta) {
+  if (state.strikeAnimation <= 0) {
+    return;
+  }
+
+  state.strikeAnimation = Math.max(0, state.strikeAnimation - delta);
+  const progress = 1 - state.strikeAnimation / strikeConfig.duration;
+  if (!state.strikeResolved && progress >= 0.46) {
+    state.strikeResolved = true;
+    const impact = getStrikeImpact();
+    if (impact) {
+      registerTargetHit(impact.impactPoint, impact.impactVelocity);
+      return;
+    }
+
+    registerMiss("Slaget ven bara ut i luften. Gubben står fortfarande ute i öknen.");
+  }
+}
+
+function getTargetAimPosition() {
+  return standingTarget.swayPivot.getWorldPosition(tempVecD);
 }
 
 function getPhoneTopY() {
@@ -2627,7 +2844,11 @@ function getMoveIntent() {
 }
 
 function updatePlayer(delta) {
-  state.poopAnimation = Math.max(0, state.poopAnimation - delta);
+  if (activePoopRope) {
+    state.poopAnimation = Math.min(0.34, state.poopAnimation + delta * 1.8);
+  } else {
+    state.poopAnimation = Math.max(0, state.poopAnimation - delta);
+  }
 
   if (state.gameOver) {
     state.isOnPhone = false;
@@ -2682,19 +2903,24 @@ function updatePlayer(delta) {
   const jumpLean = state.grounded ? 0 : Math.min(0.28, Math.max(-0.18, state.verticalVelocity * 0.04));
   const poopPose =
     state.poopAnimation > 0 ? Math.sin((1 - state.poopAnimation / 0.34) * Math.PI) : 0;
+  const strikeProgress =
+    state.strikeAnimation > 0 ? 1 - state.strikeAnimation / strikeConfig.duration : 0;
+  const strikePose = state.strikeAnimation > 0 ? Math.sin(strikeProgress * Math.PI) : 0;
+  const strikeTwist = state.strikeAnimation > 0 ? Math.sin(strikeProgress * Math.PI * 0.9) : 0;
 
   hero.leftLeg.rotation.x = walkSwing * 0.55 - poopPose * 0.42;
   hero.rightLeg.rotation.x = counterSwing * 0.55 - poopPose * 0.42;
-  hero.leftArm.rotation.x = counterSwing * 0.48 - 0.08 + poopPose * 0.08;
-  hero.rightArm.rotation.x = walkSwing * 0.28 + 0.1 + poopPose * 0.14;
-  hero.leftArm.rotation.z = 0.08 + poopPose * 0.03;
-  hero.rightArm.rotation.z = -0.22 - poopPose * 0.08;
+  hero.leftArm.rotation.x = counterSwing * 0.48 - 0.08 + poopPose * 0.08 + strikePose * 0.34;
+  hero.rightArm.rotation.x = walkSwing * 0.28 + 0.1 + poopPose * 0.14 - strikePose * 1.75;
+  hero.leftArm.rotation.z = 0.08 + poopPose * 0.03 - strikePose * 0.12;
+  hero.rightArm.rotation.z = -0.22 - poopPose * 0.08 + strikePose * 0.48;
   hero.torso.rotation.x = -state.moveAmount * 0.08 - jumpLean + poopPose * 0.2;
+  hero.torso.rotation.y = -strikeTwist * 0.34;
   hero.torso.position.y =
     Math.abs(Math.sin(state.walkCycle * 2)) * state.moveAmount * 0.08 +
     state.playerPosition.y * 0.08 -
     poopPose * 0.08;
-  hero.headPivot.rotation.y = Math.sin(clock.elapsedTime * 0.8) * 0.1;
+  hero.headPivot.rotation.y = Math.sin(clock.elapsedTime * 0.8) * 0.1 + strikeTwist * 0.18;
   hero.headPivot.rotation.x = -0.05 + Math.cos(clock.elapsedTime * 1.4) * 0.02 - poopPose * 0.04;
 }
 
@@ -2714,8 +2940,18 @@ function resolvePhoneCollision(position) {
     return;
   }
 
-  const collisionX = phoneMetrics.width * 0.7;
-  const collisionZ = phoneMetrics.length * 0.72;
+  const phoneTopY = getPhoneTopY();
+  const canJumpOntoPhone =
+    position.y >= phoneTopY - heroMetrics.phoneJumpAssistHeight &&
+    Math.abs(local.x) <= phoneMetrics.width / 2 + 0.08 &&
+    Math.abs(local.z) <= phoneMetrics.length / 2 + 0.08;
+
+  if (canJumpOntoPhone) {
+    return;
+  }
+
+  const collisionX = phoneMetrics.width / 2 + 0.12;
+  const collisionZ = phoneMetrics.length / 2 + 0.14;
 
   if (Math.abs(local.x) < collisionX && Math.abs(local.z) < collisionZ) {
     const pushX = collisionX - Math.abs(local.x);
@@ -2843,6 +3079,12 @@ function updateStandingTarget(delta) {
     scalePunch,
   );
   standingTarget.glow.material.opacity = 0.16 + targetState.hitFlash * 0.34;
+  standingTarget.beacon.material.opacity =
+    0.14 + Math.sin(clock.elapsedTime * 4.5) * 0.04 + targetState.hitFlash * 0.18;
+  standingTarget.beacon.scale.setScalar(1 + Math.sin(clock.elapsedTime * 3.8) * 0.08);
+  standingTarget.beaconRing.position.y = 4 + Math.sin(clock.elapsedTime * 2.6) * 0.12;
+  standingTarget.beaconRing.scale.setScalar(1 + Math.sin(clock.elapsedTime * 6.8) * 0.16);
+  standingTarget.beaconRing.material.opacity = 0.72 + targetState.hitFlash * 0.22;
   standingTarget.planeMaterial.emissiveIntensity = targetState.hitFlash * 0.68;
   standingTarget.baseShadow.material.opacity = 0.16 + targetState.hitFlash * 0.14;
   standingTarget.root.updateMatrixWorld(true);
@@ -2850,57 +3092,28 @@ function updateStandingTarget(delta) {
 
 function updateAimMarker() {
   const { ring, dot } = aimMarker.userData;
-  raycaster.setFromCamera(cameraCenterRay, camera);
-  const targetHit = raycaster.intersectObject(standingTarget.hitMesh, false)[0];
-
-  if (targetHit) {
-    const faceNormal = targetHit.face
-      ? tempVecO.copy(targetHit.face.normal).transformDirection(standingTarget.hitMesh.matrixWorld)
-      : tempVecO.set(0, 0, 1);
-    aimState.point.copy(targetHit.point);
-    aimState.mode = "target";
-    aimMarker.position.copy(targetHit.point).addScaledVector(faceNormal, 0.08);
-    aimMarker.lookAt(camera.position);
-    ring.rotation.x = 0;
-    dot.position.set(0, 0, 0.02);
-    ring.material.color.set(0xfff0b0);
-    dot.material.color.set(0xffd36b);
-    const pulse = 1.08 + Math.sin(clock.elapsedTime * 11) * 0.1;
-    aimMarker.scale.setScalar(pulse);
+  tempVecA.copy(getTargetAimPosition()).sub(state.playerPosition);
+  const distance = tempVecA.length();
+  if (distance > strikeConfig.assistRange) {
+    aimMarker.visible = false;
     return;
   }
 
-  aimPlane.constant = -(getPhoneTopY() + 0.03);
+  const impact = getStrikeImpact();
+  const markerPoint = impact ? impact.impactPoint : tempVecB.copy(getTargetAimPosition());
 
-  const targetPoint = tempVecE;
-  if (!raycaster.ray.intersectPlane(aimPlane, targetPoint)) {
-    targetPoint.copy(state.playerPosition).add(tempVecF.set(0, getPhoneTopY() + 0.03, -8));
-  }
-
-  const playerChest = tempVecG.copy(state.playerPosition).setY(1.2);
-  const aimOffset = targetPoint.sub(playerChest);
-  const aimDistance = THREE.MathUtils.clamp(aimOffset.length(), 2.8, 18);
-  aimOffset.setLength(aimDistance);
-  targetPoint.copy(playerChest.add(aimOffset));
-  targetPoint.y = getPhoneTopY() + 0.03;
-
-  phoneAimCenter.copy(world.phoneCenter);
-  phoneAimCenter.y = getPhoneTopY() + 0.03;
-  if (state.isOnPhone || targetPoint.distanceTo(phoneAimCenter) < 3.6) {
-    targetPoint.copy(clampWorldPointToPhoneScreen(targetPoint, 0.03));
-    aimState.mode = "phone";
-  } else {
-    aimState.mode = "ground";
-  }
-
-  aimState.point.copy(targetPoint);
-  aimMarker.position.copy(targetPoint);
-  aimMarker.rotation.set(0, 0, 0);
-  ring.rotation.x = Math.PI / 2;
-  dot.position.set(0, 0.02, 0);
-  ring.material.color.set(0xffc54f);
-  dot.material.color.set(0xffffff);
-  const pulse = 1 + Math.sin(clock.elapsedTime * 6) * 0.05;
+  aimMarker.visible = true;
+  aimMarker.position.copy(markerPoint);
+  aimMarker.lookAt(camera.position);
+  ring.rotation.x = 0;
+  dot.position.set(0, 0, 0.03);
+  ring.material.color.set(impact ? 0xfff4bf : 0xffc96b);
+  dot.material.color.set(impact ? 0xff7f32 : 0xfff7dd);
+  ring.scale.setScalar(impact ? 1.24 : 1.02);
+  dot.scale.setScalar(impact ? 1.32 : 1.08);
+  const pulse = impact
+    ? 1.34 + Math.sin(clock.elapsedTime * 11) * 0.14
+    : 1.02 + Math.sin(clock.elapsedTime * 8) * 0.08;
   aimMarker.scale.setScalar(pulse);
 }
 
@@ -2991,6 +3204,206 @@ function isPointOnPhoneScreen(point) {
     Math.abs(local.x) <= poopConfig.targetX &&
     Math.abs(local.z) <= poopConfig.targetZ
   );
+}
+
+function createPoopRope(anchorPosition) {
+  const baseMesh = new THREE.Mesh(undefined, poopTubeMaterial);
+  baseMesh.castShadow = true;
+  baseMesh.receiveShadow = true;
+
+  const slimeMesh = new THREE.Mesh(undefined, poopTubeSlimeMaterial);
+  slimeMesh.castShadow = true;
+  slimeMesh.receiveShadow = true;
+
+  const rope = {
+    group: new THREE.Group(),
+    points: [],
+    baseMesh,
+    slimeMesh,
+    anchorPosition: anchorPosition.clone(),
+    spawnTimer: 0,
+    isGrowing: true,
+  };
+  rope.group.add(baseMesh, slimeMesh);
+  scene.add(rope.group);
+  addPoopRopeSegment(rope, anchorPosition);
+  return rope;
+}
+
+function addPoopRopeSegment(rope, position) {
+  const point = {
+    position: position.clone(),
+    previousPosition: position.clone(),
+    radius: poopConfig.chainRadius * THREE.MathUtils.randFloat(0.88, 1.12),
+  };
+  rope.points.push(point);
+}
+
+function updatePoopRopes(delta) {
+  const gravityStep = delta * delta * 0.68;
+
+  for (let ropeIndex = poopRopes.length - 1; ropeIndex >= 0; ropeIndex -= 1) {
+    const rope = poopRopes[ropeIndex];
+    if (rope.isGrowing) {
+      rope.anchorPosition.copy(hero.buttAnchor.getWorldPosition(tempVecA));
+      rope.spawnTimer += delta;
+      while (
+        rope.spawnTimer >= poopConfig.chainSpawnInterval &&
+        rope.points.length < poopConfig.chainMaxSegments
+      ) {
+        rope.spawnTimer -= poopConfig.chainSpawnInterval;
+        addPoopRopeSegment(rope, rope.anchorPosition);
+      }
+
+      // Keep feeding the rope backward from the player, even while standing still.
+      const backwardDirection = tempVecD.set(
+        -Math.sin(state.playerYaw),
+        0,
+        -Math.cos(state.playerYaw),
+      );
+      const backwardLength = backwardDirection.lengthSq();
+      if (backwardLength > 0.0001) {
+        backwardDirection.multiplyScalar(1 / Math.sqrt(backwardLength));
+        for (let index = 1; index < rope.points.length; index += 1) {
+          const point = rope.points[index];
+          const influence = Math.pow(poopConfig.backwardFlowFalloff, Math.max(0, index - 1));
+          const flowStep = poopConfig.backwardFlowSpeed * influence * delta;
+          point.position.addScaledVector(backwardDirection, flowStep);
+          point.previousPosition.addScaledVector(backwardDirection, flowStep * 0.35);
+        }
+      }
+    }
+
+    for (let index = 0; index < rope.points.length; index += 1) {
+      if (rope.isGrowing && index === 0) {
+        rope.points[index].position.copy(rope.anchorPosition);
+        rope.points[index].previousPosition.copy(rope.anchorPosition);
+        continue;
+      }
+
+      const point = rope.points[index];
+      tempVecB.copy(point.position).sub(point.previousPosition).multiplyScalar(0.985);
+      point.previousPosition.copy(point.position);
+      point.position.add(tempVecB);
+      point.position.addScaledVector(gravity, gravityStep);
+    }
+
+    for (let iteration = 0; iteration < poopConfig.chainConstraintIterations; iteration += 1) {
+      if (rope.isGrowing && rope.points.length > 0) {
+        rope.points[0].position.copy(rope.anchorPosition);
+      }
+
+      for (let index = 1; index < rope.points.length; index += 1) {
+        const previousPoint = rope.points[index - 1];
+        const point = rope.points[index];
+        tempVecC.copy(point.position).sub(previousPoint.position);
+        let distance = tempVecC.length();
+        if (distance < 0.0001) {
+          tempVecC.set(0, -1, 0);
+          distance = 1;
+        } else {
+          tempVecC.divideScalar(distance);
+        }
+
+        const correction = distance - poopConfig.chainSegmentLength;
+        if (rope.isGrowing && index === 1) {
+          point.position.addScaledVector(tempVecC, -correction);
+        } else {
+          previousPoint.position.addScaledVector(tempVecC, correction * 0.5);
+          point.position.addScaledVector(tempVecC, -correction * 0.5);
+        }
+      }
+
+      for (let index = 0; index < rope.points.length; index += 1) {
+        if (rope.isGrowing && index === 0) {
+          continue;
+        }
+
+        resolvePoopPointCollision(rope.points[index]);
+      }
+    }
+
+    updatePoopRopeMeshes(rope);
+  }
+}
+
+function resolvePoopPointCollision(point) {
+  const radius = point.radius * 0.6;
+  let surfaceY = 0.02 + radius;
+  if (isPointOnPhone(point.position)) {
+    surfaceY = Math.max(surfaceY, getPhoneTopY() + radius * 0.92);
+  }
+
+  if (point.position.y < surfaceY) {
+    const velocityX = point.position.x - point.previousPosition.x;
+    const velocityZ = point.position.z - point.previousPosition.z;
+    point.position.y = surfaceY;
+    point.previousPosition.x = point.position.x - velocityX * 0.22;
+    point.previousPosition.y = point.position.y;
+    point.previousPosition.z = point.position.z - velocityZ * 0.22;
+  }
+}
+
+function updatePoopRopeMeshes(rope) {
+  if (rope.points.length < 2) {
+    rope.baseMesh.visible = false;
+    rope.slimeMesh.visible = false;
+    return;
+  }
+
+  const curvePoints = rope.points.map((point) => point.position.clone());
+  const curve = new THREE.CatmullRomCurve3(curvePoints, false, "centripetal");
+  const tubularSegments = Math.max(10, (rope.points.length - 1) * 4);
+  const baseGeometry = new THREE.TubeGeometry(
+    curve,
+    tubularSegments,
+    poopConfig.chainRadius,
+    poopConfig.tubeSides,
+    false,
+  );
+  const slimeGeometry = new THREE.TubeGeometry(
+    curve,
+    tubularSegments,
+    poopConfig.chainRadius * poopConfig.tubeOverlayScale,
+    poopConfig.tubeSides,
+    false,
+  );
+
+  if (rope.baseMesh.geometry) {
+    rope.baseMesh.geometry.dispose();
+  }
+  if (rope.slimeMesh.geometry) {
+    rope.slimeMesh.geometry.dispose();
+  }
+
+  rope.baseMesh.geometry = baseGeometry;
+  rope.slimeMesh.geometry = slimeGeometry;
+  rope.baseMesh.visible = true;
+  rope.slimeMesh.visible = true;
+}
+
+function trimPoopRopes() {
+  while (poopRopes.length > poopConfig.maxRopes) {
+    const rope = poopRopes.shift();
+    if (!rope) {
+      break;
+    }
+
+    destroyPoopRope(rope);
+    if (activePoopRope === rope) {
+      activePoopRope = null;
+    }
+  }
+}
+
+function destroyPoopRope(rope) {
+  if (rope.baseMesh.geometry) {
+    rope.baseMesh.geometry.dispose();
+  }
+  if (rope.slimeMesh.geometry) {
+    rope.slimeMesh.geometry.dispose();
+  }
+  scene.remove(rope.group);
 }
 
 function createPoopProjectile(start) {
@@ -3205,6 +3618,9 @@ function registerTargetHit(impactPoint, velocity) {
   const hitForce = THREE.MathUtils.clamp(velocity.length() * 0.06, 1.2, 2.4);
   const localImpact = standingTarget.swayPivot.worldToLocal(tempVecP.copy(impactPoint));
   const horizontalOffset = THREE.MathUtils.clamp(localImpact.x / 0.55, -1, 1);
+  state.hits += 1;
+  state.combo += 1;
+  state.score += 16 + state.combo * 10;
   standingTarget.state.wobbleVelocity += hitForce + Math.abs(horizontalOffset) * 0.35;
   standingTarget.state.recoil = Math.min(
     standingTarget.state.recoil + 0.28 + hitForce * 0.05,
@@ -3213,16 +3629,17 @@ function registerTargetHit(impactPoint, velocity) {
   standingTarget.state.twist += horizontalOffset * 0.2;
   standingTarget.state.hitFlash = 1;
   state.hemorrhoids = THREE.MathUtils.clamp(
-    state.hemorrhoids - (18 + hitForce * 2.4),
+    state.hemorrhoids - (6 + hitForce * 0.8),
     0,
     100,
   );
   createImpactBurst(impactPoint, velocity);
   setMessage(
     state.hemorrhoids > 0
-      ? "Träff. Han gungar till och hemorojdrisken sjunker."
-      : "Perfekt träff. All press släppte för stunden.",
+      ? "Klockren smäll. Han gungar till där ute i öknen och hemorojdrisken sjunker."
+      : "Perfekt smocka. All press släppte för stunden.",
   );
+  updateHud();
 }
 
 function updateHemorrhoids(delta) {
@@ -3246,19 +3663,20 @@ function updateHemorrhoids(delta) {
 
   if (state.isOnPhone) {
     state.hemorrhoids = THREE.MathUtils.clamp(
-      state.hemorrhoids + delta * 34,
+      state.hemorrhoids + delta * 17.0,
       0,
       100,
     );
   } else if (nearbyPressure > 0) {
     state.hemorrhoids = THREE.MathUtils.clamp(
-      state.hemorrhoids + delta * (4 + nearbyPressure * 18),
+      state.hemorrhoids + delta * (2.0 + nearbyPressure * 9.0),
       0,
       100,
     );
   }
 
-  dangerRing.material.opacity = 0.14 + pressure * 0.3 + Math.sin(clock.elapsedTime * 5) * pressure * 0.05;
+  dangerRing.userData.fill.material.opacity = 0.35 + pressure * 0.2 + Math.sin(clock.elapsedTime * 4) * 0.05;
+  dangerRing.userData.outline.material.emissiveIntensity = 0.8 + pressure * 0.4 + Math.sin(clock.elapsedTime * 4) * 0.15;
   dangerRing.scale.setScalar(1 + pressure * 0.06);
 
   if (state.hemorrhoids >= 100) {
@@ -3458,6 +3876,13 @@ function clearProjectiles() {
   }
 }
 
+function clearPoopRopes() {
+  for (let index = poopRopes.length - 1; index >= 0; index -= 1) {
+    destroyPoopRope(poopRopes[index]);
+    poopRopes.splice(index, 1);
+  }
+}
+
 function clearSplats() {
   for (let index = splats.length - 1; index >= 0; index -= 1) {
     scene.remove(splats[index]);
@@ -3501,9 +3926,12 @@ function animate() {
   }
 
   updatePlayer(delta);
+  updatePoopHold(delta);
+  updateStrike(delta);
   updateCamera(delta);
   updateStandingTarget(delta);
   updateAimMarker();
+  updatePoopRopes(delta);
   updateProjectiles(delta);
   updateSmoke(delta);
   updateImpactBursts(delta);
