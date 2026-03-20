@@ -1,19 +1,19 @@
-@import url("https://fonts.googleapis.com/css2?family=Bebas+Neue&family=IBM+Plex+Sans:wght@400;500;700&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Bebas+Neue&family=IBM+Plex+Sans:wght@400;500;700&display=swap&subset=latin-ext");
 
 :root {
-  --bg-top: #8d9676;
-  --bg-mid: #606f63;
-  --bg-bottom: #1b1a18;
-  --panel: rgba(28, 24, 21, 0.74);
-  --panel-strong: rgba(16, 13, 12, 0.84);
-  --line: rgba(255, 231, 189, 0.22);
-  --text: #f7ecd4;
-  --muted: #d3c2a3;
-  --accent: #d36d2f;
-  --accent-soft: #ebae6c;
-  --meter-start: #8c4f22;
-  --meter-end: #f3cf74;
-  --shadow: 0 24px 60px rgba(0, 0, 0, 0.32);
+  --bg-top: #91c7ee;
+  --bg-mid: #bfd8e8;
+  --bg-bottom: #eef4f6;
+  --panel: rgba(247, 243, 235, 0.76);
+  --panel-strong: rgba(243, 238, 230, 0.88);
+  --line: rgba(106, 131, 150, 0.18);
+  --text: #263746;
+  --muted: #617688;
+  --accent: #d9823f;
+  --accent-soft: #e7a761;
+  --meter-start: #d98d49;
+  --meter-end: #efcd75;
+  --shadow: 0 24px 60px rgba(56, 76, 92, 0.16);
 }
 
 * {
@@ -28,9 +28,11 @@ body {
   cursor: none;
   color: var(--text);
   background:
-    radial-gradient(circle at top, rgba(255, 204, 123, 0.22), transparent 32%),
+    radial-gradient(circle at 50% 10%, rgba(255, 226, 132, 0.34), rgba(255, 226, 132, 0.08) 14%, transparent 24%),
+    radial-gradient(circle at 18% 24%, rgba(255, 255, 255, 0.38), transparent 16%),
+    radial-gradient(circle at 82% 20%, rgba(255, 255, 255, 0.28), transparent 14%),
     linear-gradient(180deg, var(--bg-top) 0%, var(--bg-mid) 44%, var(--bg-bottom) 100%);
-  font-family: "IBM Plex Sans", sans-serif;
+  font-family: "IBM Plex Sans", "Noto Sans", "Segoe UI", sans-serif;
 }
 
 body::before,
@@ -48,7 +50,7 @@ body::before {
   width: 38vw;
   height: 38vw;
   border-radius: 50%;
-  background: rgba(255, 191, 112, 0.18);
+  background: rgba(255, 214, 112, 0.16);
 }
 
 body::after {
@@ -57,7 +59,7 @@ body::after {
   width: 46vw;
   height: 46vw;
   border-radius: 50%;
-  background: rgba(27, 10, 6, 0.25);
+  background: rgba(133, 181, 214, 0.12);
 }
 
 #app {
@@ -103,7 +105,7 @@ body::after {
 .message-card {
   backdrop-filter: blur(18px);
   background:
-    linear-gradient(180deg, rgba(255, 240, 214, 0.06), transparent 100%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.3), rgba(255, 255, 255, 0.12) 100%),
     var(--panel);
   border: 1px solid var(--line);
   box-shadow: var(--shadow);
@@ -125,7 +127,7 @@ body::after {
 
 h1 {
   margin: 0;
-  font-family: "Bebas Neue", sans-serif;
+  font-family: "Bebas Neue", "IBM Plex Sans", "Noto Sans", sans-serif;
   font-size: clamp(2.3rem, 4vw, 4.3rem);
   line-height: 0.92;
   letter-spacing: 0.02em;
@@ -156,8 +158,8 @@ h1 {
 .stat {
   padding: 0.9rem 0.8rem 0.78rem;
   border-radius: 1rem;
-  background: rgba(255, 255, 255, 0.045);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.22);
+  border: 1px solid rgba(120, 144, 160, 0.14);
 }
 
 .label {
@@ -195,7 +197,7 @@ h1 {
   height: 0.9rem;
   border-radius: 999px;
   overflow: hidden;
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(134, 158, 179, 0.18);
 }
 
 .meter-fill {
@@ -209,7 +211,7 @@ h1 {
 
 .message-card {
   background:
-    linear-gradient(180deg, rgba(255, 214, 165, 0.1), transparent 100%),
+    linear-gradient(180deg, rgba(255, 225, 173, 0.2), transparent 100%),
     var(--panel-strong);
 }
 
@@ -220,11 +222,11 @@ h1 {
   width: 1.35rem;
   height: 1.35rem;
   transform: translate(-50%, -50%);
-  border: 2px solid rgba(255, 239, 196, 0.9);
+  border: 2px solid rgba(255, 247, 232, 0.95);
   border-radius: 50%;
   box-shadow:
-    0 0 0 0.32rem rgba(255, 211, 122, 0.08),
-    0 0 18px rgba(255, 196, 91, 0.25);
+    0 0 0 0.32rem rgba(255, 222, 138, 0.1),
+    0 0 18px rgba(255, 212, 128, 0.22);
   pointer-events: none;
 }
 
@@ -232,7 +234,7 @@ h1 {
 .reticle::after {
   content: "";
   position: absolute;
-  background: rgba(255, 239, 196, 0.9);
+  background: rgba(255, 247, 232, 0.95);
 }
 
 .reticle::before {
@@ -272,8 +274,8 @@ h1 {
   padding: 0.85rem;
   border-radius: 999px;
   backdrop-filter: blur(18px);
-  background: rgba(12, 10, 9, 0.62);
-  border: 1px solid rgba(255, 240, 214, 0.12);
+  background: rgba(244, 239, 232, 0.8);
+  border: 1px solid rgba(120, 144, 160, 0.16);
   box-shadow: var(--shadow);
 }
 
@@ -286,11 +288,11 @@ h1 {
   font: inherit;
   font-weight: 700;
   color: var(--text);
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.34);
 }
 
 .control-btn.accent {
-  background: linear-gradient(180deg, #dd8b46, #ae4f20);
+  background: linear-gradient(180deg, #e8b766, #d88344);
 }
 
 .game-over {
@@ -303,9 +305,9 @@ h1 {
   text-align: center;
   backdrop-filter: blur(20px);
   background:
-    linear-gradient(180deg, rgba(255, 149, 84, 0.14), transparent 100%),
-    rgba(17, 12, 10, 0.9);
-  border: 1px solid rgba(255, 227, 179, 0.18);
+    linear-gradient(180deg, rgba(255, 214, 118, 0.16), transparent 100%),
+    rgba(240, 235, 228, 0.92);
+  border: 1px solid rgba(120, 144, 160, 0.16);
   box-shadow: var(--shadow);
 }
 
