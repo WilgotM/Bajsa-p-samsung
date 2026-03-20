@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="sv">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0"
+    />
+    <title>Bajsa pa Samsung S25 Ultra</title>
+    <meta
+      name="description"
+      content="Ett bisarrt litet 3D-webbspel om en rostig gammal kedjerokare som terroriserar en Samsung Galaxy S25 Ultra."
+    />
+    <script type="module" src="/src/main.js"></script>
+  </head>
+  <body>
+    <div id="app">
+      <canvas id="scene"></canvas>
+
+      <section class="hud hud-top">
+        <div class="brand-block">
+          <p class="eyebrow">Sunkig simulator</p>
+          <h1>Bajsa pa Samsung S25 Ultra</h1>
+          <p class="subtitle">
+            Spring runt som i ett vanligt tredjepersonsspel, vrid kameran med
+            musen, hoppa over skiten och leverera bajset rakt fran rumpan.
+          </p>
+        </div>
+
+        <div class="scoreboard">
+          <div class="stat">
+            <span class="label">Traffar</span>
+            <strong id="hits">0</strong>
+          </div>
+          <div class="stat">
+            <span class="label">Kombo</span>
+            <strong id="combo">x0</strong>
+          </div>
+          <div class="stat">
+            <span class="label">Skitpoang</span>
+            <strong id="score">0</strong>
+          </div>
+        </div>
+      </section>
+
+      <section class="hud hud-bottom">
+        <div class="meter-card">
+          <div class="meter-copy">
+            <span class="label">Hemorrojdrisk</span>
+            <strong id="meter-text">0%</strong>
+          </div>
+          <div class="meter-track">
+            <div id="meter-fill" class="meter-fill"></div>
+          </div>
+        </div>
+
+        <div class="message-card">
+          <p id="message" class="message">WASD gar runt, musen vrider kameran, Space hoppar.</p>
+          <p class="controls">
+            `WASD` ror sig. Musen vrider kameran. `Space` hoppar. Klick eller
+            `F` bajsar. Ju narmare telefonen du star, desto snabbare far du
+            hemorrojder och game over.
+          </p>
+        </div>
+      </section>
+
+      <div class="reticle" aria-hidden="true"></div>
+
+      <section id="game-over" class="game-over hidden" aria-live="polite">
+        <p class="eyebrow">Game Over</p>
+        <h2>Doomscrollingen gav dig hemorrojder</h2>
+        <p>Ny runda laddas in automatiskt.</p>
+      </section>
+    </div>
+  </body>
+</html>
