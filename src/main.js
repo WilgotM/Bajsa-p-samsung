@@ -635,6 +635,10 @@ function addTransitionCover() {
   });
   shrubMesh.receiveShadow = true;
   scene.add(shrubMesh);
+  connectorShrubs.forEach((position, index) => {
+    const size = 1.1 + (index % 4) * 0.14;
+    registerCylinderCollider(position, 0.5 * size, 0.2);
+  });
 
   [
     new THREE.Vector3(-40, 0, 13),
@@ -1035,6 +1039,7 @@ function addCentralLandmarks() {
   lookoutRing.castShadow = true;
   lookoutRing.receiveShadow = true;
   scene.add(lookoutRing);
+  registerCylinderCollider(new THREE.Vector3(38.5, 0, 0.2), 1.3, 0.2);
 }
 
 function addForestBiome() {
@@ -1094,6 +1099,10 @@ function addForestBiome() {
   });
   shrubMesh.receiveShadow = true;
   scene.add(shrubMesh);
+  shrubPoints.forEach((position, index) => {
+    const size = 1.1 + (index % 3) * 0.18;
+    registerCylinderCollider(position, 0.36 * size, 0.16);
+  });
 
   const logPositions = [
     new THREE.Vector3(-6.8, 0.26, -28.2),
@@ -1114,6 +1123,7 @@ function addForestBiome() {
     log.castShadow = true;
     log.receiveShadow = true;
     scene.add(log);
+    registerCylinderCollider(position, 0.92 + (index % 2) * 0.16, 0.16);
   });
 }
 
@@ -1197,12 +1207,15 @@ function addDesertBiome() {
     avoid: [{ type: "box", x: 18, z: -6, halfX: 11.5, halfZ: 2.8 }],
   });
   dunePositions.forEach((point, index) => {
+    const scaleX = 1.8 + (index % 3) * 0.4;
+    const scaleZ = 1.3 + (index % 4) * 0.18;
     const dune = new THREE.Mesh(new THREE.SphereGeometry(1.1, 10, 8), duneMaterial);
     dune.position.set(point.x, 0.28, point.z);
-    dune.scale.set(1.8 + (index % 3) * 0.4, 0.5 + (index % 2) * 0.12, 1.3 + (index % 4) * 0.18);
+    dune.scale.set(scaleX, 0.5 + (index % 2) * 0.12, scaleZ);
     dune.rotation.y = index * 0.42;
     dune.receiveShadow = true;
     scene.add(dune);
+    registerCylinderCollider(point, 1.05 * Math.max(scaleX, scaleZ), 0.18);
   });
 
   const cactusPositions = scatterPoints({
@@ -1223,8 +1236,10 @@ function addDesertBiome() {
     new THREE.Vector3(44, 0, 9),
   ];
   mesaPositions.forEach((position, index) => {
+    const radiusTop = 2.6 + index * 0.3;
+    const radiusBottom = 3.4 + index * 0.35;
     const mesa = new THREE.Mesh(
-      new THREE.CylinderGeometry(2.6 + index * 0.3, 3.4 + index * 0.35, 6.8 + index * 1.1, 6),
+      new THREE.CylinderGeometry(radiusTop, radiusBottom, 6.8 + index * 1.1, 6),
       new THREE.MeshStandardMaterial({
         color: index % 2 === 0 ? 0x996f45 : 0xb48357,
         roughness: 0.94,
@@ -1235,6 +1250,7 @@ function addDesertBiome() {
     mesa.castShadow = true;
     mesa.receiveShadow = true;
     scene.add(mesa);
+    registerCylinderCollider(position, Math.max(radiusTop, radiusBottom) * 0.9, 0.24);
   });
 
   addRockScatter({
@@ -1314,8 +1330,6 @@ function addSnowBiome() {
   mountainPositions.forEach((position, index) => {
     createMountain(position, 1 + index * 0.08);
   });
-  registerCylinderCollider(new THREE.Vector3(-42, 0, 14), 3.2, 0.9);
-  registerCylinderCollider(new THREE.Vector3(-48, 0, -15), 3.2, 0.9);
 
   const pinePositions = scatterPoints({
     center: world.snowCenter,
@@ -1366,6 +1380,8 @@ function createMountain(position, scale = 1) {
   cap.rotation.y = 0.45;
   cap.castShadow = true;
   scene.add(cap);
+
+  registerCylinderCollider(position, 3.3 * scale, 0.7);
 }
 
 function addPineTrees(positions, baseScale = 1, colliderPadding = 0.24) {
@@ -1672,6 +1688,7 @@ function createStreetLamp(position) {
   group.add(lamp);
 
   scene.add(group);
+  registerCylinderCollider(position, 0.22, 0.16);
 }
 
 function createCar(position, color, rotation = 0) {
@@ -1796,6 +1813,12 @@ function addRockScatter({
   rockMesh.castShadow = true;
   rockMesh.receiveShadow = true;
   scene.add(rockMesh);
+  points.forEach((point, index) => {
+    const blend = index / Math.max(points.length - 1, 1);
+    const scale = THREE.MathUtils.lerp(minScale, maxScale, blend);
+    const widthScale = 1 + (index % 3) * 0.16;
+    registerCylinderCollider(point, scale * widthScale, 0.18);
+  });
 }
 
 function addRockLine(points, { color = 0x7e7164, scale = 1, collider = 0.78 } = {}) {
@@ -1834,6 +1857,11 @@ function addShrubLine(points, { color = 0x73885f, scale = 1 } = {}) {
   });
   shrubMesh.receiveShadow = true;
   scene.add(shrubMesh);
+  points.forEach((point, index) => {
+    const size = scale * (0.96 + (index % 4) * 0.12);
+    const widthScale = 1.26 + (index % 3) * 0.12;
+    registerCylinderCollider(point, 0.4 * size * widthScale, 0.14);
+  });
 }
 
 function fillInstanceTransforms(mesh, positions, transformCallback) {
