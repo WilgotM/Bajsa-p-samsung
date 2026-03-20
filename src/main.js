@@ -34,6 +34,18 @@ groundTexture.wrapT = THREE.ClampToEdgeWrapping;
 groundTexture.center.set(0.5, 0.5);
 groundTexture.offset.set(-0.16, -0.1);
 
+const GROUND_LAYERS = {
+  base: 0,
+  legacyMap: 1,
+  biomeBase: 2,
+  transition: 3,
+  biomeDetail: 4,
+  roads: 5,
+  roadMarks: 6,
+  water: 7,
+  glow: 8,
+};
+
 const camera = new THREE.PerspectiveCamera(
   56,
   window.innerWidth / window.innerHeight,
@@ -272,6 +284,7 @@ function setupWorld() {
   );
   baseGround.rotation.x = -Math.PI / 2;
   baseGround.position.y = -0.02;
+  configureGroundSurface(baseGround, { layer: GROUND_LAYERS.base });
   baseGround.receiveShadow = true;
   scene.add(baseGround);
 
@@ -326,6 +339,7 @@ function setupWorld() {
   );
   grassGlow.rotation.x = -Math.PI / 2;
   grassGlow.position.set(world.phoneCenter.x, 0.012, world.phoneCenter.z);
+  configureGroundSurface(grassGlow, { layer: GROUND_LAYERS.glow });
   scene.add(grassGlow);
 
 
@@ -484,6 +498,7 @@ function addLegacyMapPlate() {
   );
   ground.rotation.x = -Math.PI / 2;
   ground.position.y = 0.055;
+  configureGroundSurface(ground, { layer: GROUND_LAYERS.legacyMap });
   ground.receiveShadow = true;
   scene.add(ground);
 
@@ -500,6 +515,7 @@ function addLegacyMapPlate() {
   frame.rotation.x = -Math.PI / 2;
   frame.position.y = 0.026;
   frame.scale.set(1, 1, 0.92);
+  configureGroundSurface(frame, { layer: GROUND_LAYERS.roads });
   scene.add(frame);
 
   const moatShadow = new THREE.Mesh(
@@ -514,6 +530,7 @@ function addLegacyMapPlate() {
   moatShadow.rotation.x = -Math.PI / 2;
   moatShadow.position.y = 0.018;
   moatShadow.scale.set(1, 1, 0.92);
+  configureGroundSurface(moatShadow, { layer: GROUND_LAYERS.transition });
   scene.add(moatShadow);
 }
 
@@ -573,7 +590,7 @@ function addTransitionGround() {
       scaleZ: 0.92,
       rotation: 0.26,
     },
-  ].forEach((patch) => addBiomePatch(patch));
+  ].forEach((patch) => addBiomePatch({ ...patch, layer: GROUND_LAYERS.transition }));
 }
 
 function addTransitionCover() {
@@ -936,6 +953,7 @@ function addBiomePatch({
   radius,
   color,
   y = 0.01,
+  layer = GROUND_LAYERS.biomeBase,
   opacity = 1,
   scaleX = 1,
   scaleZ = 1,
@@ -955,9 +973,22 @@ function addBiomePatch({
   patch.rotation.z = rotation;
   patch.position.set(position.x, y, position.z);
   patch.scale.set(scaleX, 1, scaleZ);
+  configureGroundSurface(patch, { layer });
   patch.receiveShadow = true;
   scene.add(patch);
   return patch;
+}
+
+function configureGroundSurface(mesh, { layer, transparent = mesh.material.transparent } = {}) {
+  const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+  mesh.renderOrder = 10 + layer;
+  mesh.position.y += layer * 0.0025;
+  materials.forEach((material) => {
+    material.polygonOffset = true;
+    material.polygonOffsetFactor = -1 - layer * 2;
+    material.polygonOffsetUnits = -1 - layer * 2;
+    material.depthWrite = !transparent;
+  });
 }
 
 function addRoadSegment({
@@ -979,6 +1010,7 @@ function addRoadSegment({
   road.rotation.x = -Math.PI / 2;
   road.rotation.z = rotation;
   road.position.set(position.x, y, position.z);
+  configureGroundSurface(road, { layer: GROUND_LAYERS.roads });
   road.receiveShadow = true;
   scene.add(road);
   return road;
@@ -997,6 +1029,7 @@ function addTownLaneMarks() {
     const horizontalMark = new THREE.Mesh(new THREE.PlaneGeometry(1.1, 0.22), markMaterial);
     horizontalMark.rotation.x = -Math.PI / 2;
     horizontalMark.position.set(index * 5.6, 0.025, world.townCenter.z);
+    configureGroundSurface(horizontalMark, { layer: GROUND_LAYERS.roadMarks, transparent: true });
     scene.add(horizontalMark);
   }
   for (let index = -3; index <= 3; index += 1) {
@@ -1006,6 +1039,7 @@ function addTownLaneMarks() {
     const verticalMark = new THREE.Mesh(new THREE.PlaneGeometry(0.24, 1.05), markMaterial);
     verticalMark.rotation.x = -Math.PI / 2;
     verticalMark.position.set(0, 0.025, world.townCenter.z + index * 4.4);
+    configureGroundSurface(verticalMark, { layer: GROUND_LAYERS.roadMarks, transparent: true });
     scene.add(verticalMark);
   }
 }
@@ -1047,6 +1081,7 @@ function addForestBiome() {
     position: world.forestCenter,
     radius: 9,
     color: 0x425c34,
+    layer: GROUND_LAYERS.biomeDetail,
     opacity: 0.32,
     scaleX: 1.18,
     scaleZ: 1.1,
@@ -1188,6 +1223,7 @@ function addDesertBiome() {
     position: world.desertCenter,
     radius: 8.8,
     color: 0xe0c486,
+    layer: GROUND_LAYERS.biomeDetail,
     opacity: 0.36,
     scaleX: 1.14,
     scaleZ: 1.02,
@@ -1215,7 +1251,6 @@ function addDesertBiome() {
     dune.rotation.y = index * 0.42;
     dune.receiveShadow = true;
     scene.add(dune);
-    registerCylinderCollider(point, 1.05 * Math.max(scaleX, scaleZ), 0.18);
   });
 
   const cactusPositions = scatterPoints({
@@ -1250,7 +1285,7 @@ function addDesertBiome() {
     mesa.castShadow = true;
     mesa.receiveShadow = true;
     scene.add(mesa);
-    registerCylinderCollider(position, Math.max(radiusTop, radiusBottom) * 0.9, 0.24);
+    registerCylinderCollider(position, Math.max(radiusTop, radiusBottom) * 0.82, 0.14);
   });
 
   addRockScatter({
@@ -1292,7 +1327,7 @@ function createCactus(position, scale = 1) {
   group.add(armB);
 
   scene.add(group);
-  registerCylinderCollider(position, 0.22 * scale, 0.18);
+  registerCylinderCollider(position, 0.2 * scale, 0.1);
 }
 
 function addSnowBiome() {
@@ -1300,6 +1335,7 @@ function addSnowBiome() {
     position: world.snowCenter,
     radius: 8.6,
     color: 0xf6fbff,
+    layer: GROUND_LAYERS.biomeDetail,
     opacity: 0.42,
     scaleX: 1.14,
     scaleZ: 1.2,
@@ -1319,6 +1355,7 @@ function addSnowBiome() {
   pond.rotation.x = -Math.PI / 2;
   pond.position.set(world.snowCenter.x + 2, 0.024, world.snowCenter.z + 0.8);
   pond.scale.set(1.24, 1, 0.76);
+  configureGroundSurface(pond, { layer: GROUND_LAYERS.water, transparent: true });
   scene.add(pond);
 
   const mountainPositions = [
