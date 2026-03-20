@@ -76,8 +76,6 @@ const state = {
   combo: 0,
   gameOver: false,
   resetTimer: 0,
-  lastPointerX: null,
-  lastPointerY: null,
   message: "",
 };
 
@@ -103,6 +101,8 @@ resetRound(true);
 window.addEventListener("resize", onResize);
 window.addEventListener("keydown", onKeyDown);
 window.addEventListener("keyup", onKeyUp);
+window.addEventListener("pointerlockchange", onPointerLockChange);
+window.addEventListener("pointerlockerror", onPointerLockError);
 canvas.addEventListener("pointerdown", onPointerDown);
 canvas.addEventListener("pointermove", onPointerMove);
 
@@ -589,8 +589,6 @@ function resetRound(initial = false) {
   state.combo = 0;
   state.gameOver = false;
   state.resetTimer = 0;
-  state.lastPointerX = null;
-  state.lastPointerY = null;
 
   hero.root.position.copy(state.playerPosition);
   hero.root.rotation.y = state.playerYaw;
@@ -599,7 +597,7 @@ function resetRound(initial = false) {
   updateHud();
   setMessage(
     initial
-      ? "WASD gar runt, musen vrider kameran, Space hoppar."
+      ? "Klicka i scenen för att låsa musen. WASD går runt, musen vrider kameran, Space hoppar."
       : "Ny runda. Spring in i riskzonen om du vill framkalla hemorrojder.",
   );
 }
@@ -658,27 +656,43 @@ function onPointerDown(event) {
   if (event.button !== 0) {
     return;
   }
+
+  if (!isPointerLocked()) {
+    canvas.requestPointerLock();
+    return;
+  }
+
   shootPoop();
 }
 
 function onPointerMove(event) {
-  const nextX =
-    typeof event.movementX === "number" && event.movementX !== 0
-      ? event.movementX
-      : state.lastPointerX === null
-        ? 0
-        : event.clientX - state.lastPointerX;
-  const nextY =
-    typeof event.movementY === "number" && event.movementY !== 0
-      ? event.movementY
-      : state.lastPointerY === null
-        ? 0
-        : event.clientY - state.lastPointerY;
+  if (!isPointerLocked()) {
+    return;
+  }
 
+  const nextX = typeof event.movementX === "number" ? event.movementX : 0;
+  const nextY = typeof event.movementY === "number" ? event.movementY : 0;
   state.cameraYaw -= nextX * 0.0052;
   state.cameraPitch = THREE.MathUtils.clamp(state.cameraPitch - nextY * 0.0038, -0.65, 0.22);
-  state.lastPointerX = event.clientX;
-  state.lastPointerY = event.clientY;
+}
+
+function onPointerLockChange() {
+  document.body.classList.toggle("pointer-locked", isPointerLocked());
+
+  if (isPointerLocked()) {
+    setMessage("Musen är låst. Vrid runt med musen, WASD går runt.");
+    return;
+  }
+
+  setMessage("Klicka i scenen för att låsa musen igen.");
+}
+
+function onPointerLockError() {
+  setMessage("Det gick inte att låsa musen i den här webbläsaren.");
+}
+
+function isPointerLocked() {
+  return document.pointerLockElement === canvas;
 }
 
 function shootPoop() {
