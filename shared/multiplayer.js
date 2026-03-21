@@ -65,6 +65,7 @@ export const ACTION_KINDS = Object.freeze({
 
 export const WORLD_EVENT_KINDS = Object.freeze({
   targetHit: "target-hit",
+  playerHit: "player-hit",
 });
 
 export const PLAYER_COLOR_PALETTE = [

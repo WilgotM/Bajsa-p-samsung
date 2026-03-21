@@ -53,7 +53,8 @@ var ACTION_KINDS = Object.freeze({
   strike: "strike"
 });
 var WORLD_EVENT_KINDS = Object.freeze({
-  targetHit: "target-hit"
+  targetHit: "target-hit",
+  playerHit: "player-hit"
 });
 var PLAYER_COLOR_PALETTE = [
   "#d9823f",
@@ -612,7 +613,34 @@ var LobbyRoom = class {
     if (!player.joined || !event?.kind) {
       return;
     }
-    if (event.kind !== WORLD_EVENT_KINDS.targetHit) {
+    if (event.kind === WORLD_EVENT_KINDS.targetHit) {
+      this.broadcast(
+        {
+          type: "world-event",
+          playerId: player.id,
+          event: {
+            kind: WORLD_EVENT_KINDS.targetHit,
+            at: Date.now(),
+            impactPoint: sanitizeVector3(event.impactPoint),
+            velocity: sanitizeVector3(event.velocity)
+          }
+        },
+        player.id
+      );
+      return;
+    }
+    if (event.kind !== WORLD_EVENT_KINDS.playerHit) {
+      return;
+    }
+    const targetPlayerId = typeof event.targetPlayerId === "string" ? event.targetPlayerId : "";
+    if (!targetPlayerId || targetPlayerId === player.id) {
+      return;
+    }
+    const targetPlayer = this.players.get(targetPlayerId);
+    if (!targetPlayer?.joined) {
+      return;
+    }
+    if (player.playerPhase !== MATCH_PHASES.active || targetPlayer.playerPhase !== MATCH_PHASES.active) {
       return;
     }
     this.broadcast(
@@ -620,9 +648,13 @@ var LobbyRoom = class {
         type: "world-event",
         playerId: player.id,
         event: {
-          kind: WORLD_EVENT_KINDS.targetHit,
+          kind: WORLD_EVENT_KINDS.playerHit,
           at: Date.now(),
-          impactPoint: sanitizeVector3(event.impactPoint),
+          targetPlayerId,
+          impactPoint: sanitizeVector3(
+            event.impactPoint,
+            targetPlayer.pose ?? createSpawnPose(targetPlayer.playerPhase)
+          ),
           velocity: sanitizeVector3(event.velocity)
         }
       },

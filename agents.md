@@ -31,6 +31,14 @@ Det här är ett litet 3D-webbspel byggt med Vite och Three.js.
   - `poop-stop`
   - `strike`
   - `target-hit`
+  - `player-hit` (när en spelare träffar en annan med handslag)
+
+## PvP (handslag)
+
+- I aktiv fas kan spelaren slå med `F` eller vänsterklick (snabbt tryck).
+- Håller man vänsterklick på telefonen fortsätter bajs-mekaniken som tidigare.
+- Träff på annan spelare i samma lobby skickas som `player-hit` via Workern.
+- Spelaren som blir träffad får ökad hemorojdrisk, men med låg handskada (förberett för framtida vapenbalans).
 
 ## Spelarprofiler och skins
 

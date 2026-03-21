@@ -229,6 +229,8 @@ const tempVecN = new THREE.Vector3();
 const tempVecO = new THREE.Vector3();
 const tempVecP = new THREE.Vector3();
 const tempVecQ = new THREE.Vector3();
+const tempVecR = new THREE.Vector3();
+const tempVecS = new THREE.Vector3();
 const cameraCenterRay = new THREE.Vector2(0, 0);
 const aimPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -0.2);
 const phoneAimCenter = new THREE.Vector3();
@@ -248,6 +250,7 @@ const poopHoldState = {
   isPointerDown: false,
   holdTime: 0,
   started: false,
+  tapStrikeArmed: false,
 };
 
 const phoneMetrics = {
@@ -283,7 +286,13 @@ const strikeConfig = {
   cooldown: 0.42,
   range: 3.4,
   assistRange: 11,
-  playerTurnSnap: 0.26,
+};
+const handStrikeConfig = {
+  hemorrhoidDamage: 8.5,
+  playerRangePadding: 0.95,
+  playerHeightTolerance: 1.65,
+  playerConeRadians: 1.45,
+  impactSpeed: 16,
 };
 const standingTargetPosition = new THREE.Vector3(36.4, 0, -1.8);
 
@@ -3672,6 +3681,7 @@ function resetRoundState() {
   poopHoldState.isPointerDown = false;
   poopHoldState.holdTime = 0;
   poopHoldState.started = false;
+  poopHoldState.tapStrikeArmed = false;
   activePoopRope = null;
   gameOverEl.classList.add("hidden");
   updateHud();
@@ -3822,6 +3832,26 @@ function handleLobbyWorldEvent(message) {
         message.event.velocity?.z ?? 0,
       ),
     );
+    return;
+  }
+
+  if (message.event?.kind === WORLD_EVENT_KINDS.playerHit) {
+    const impactPoint = new THREE.Vector3(
+      message.event.impactPoint?.x ?? 0,
+      message.event.impactPoint?.y ?? 0,
+      message.event.impactPoint?.z ?? 0,
+    );
+    const impactVelocity = new THREE.Vector3(
+      message.event.velocity?.x ?? 0,
+      message.event.velocity?.y ?? 0,
+      message.event.velocity?.z ?? 0,
+    );
+    createImpactBurst(impactPoint, impactVelocity);
+
+    if (message.event.targetPlayerId === multiplayerState.selfId) {
+      const attackerName = multiplayerState.playerRoster.get(message.playerId)?.name || "En spelare";
+      applyHandStrikeDamage(attackerName);
+    }
   }
 }
 
@@ -4284,10 +4314,10 @@ function onPointerDown(event) {
     raycaster.setFromCamera(mouse, camera);
     const intersects = raycaster.intersectObject(standingTarget.root, true);
     if (intersects.length > 0) {
-      applyTargetHitVisuals(intersects[0].point, new THREE.Vector3(0, 5, -12));
-      standingTarget.state.hitFlash = 3; // Huge squash/stretch flash
-      standingTarget.state.wobbleVelocity += 12; // Extra wobble
-      standingTarget.state.menuSpin = (standingTarget.state.menuSpin || 0) + Math.PI * 2; // Cartwheel!
+      if (state.strikeAnimation <= 0) {
+        state.strikeAnimation = strikeConfig.duration;
+        state.strikeResolved = false;
+      }
     }
     return;
   }
@@ -4307,10 +4337,10 @@ function onPointerDown(event) {
       raycaster.setFromCamera(mouse, camera);
       const intersects = raycaster.intersectObject(standingTarget.root, true);
       if (intersects.length > 0) {
-        applyTargetHitVisuals(intersects[0].point, new THREE.Vector3(0, 5, -12));
-        standingTarget.state.hitFlash = 3;
-        standingTarget.state.wobbleVelocity += 12;
-        standingTarget.state.menuSpin = (standingTarget.state.menuSpin || 0) + Math.PI * 2;
+        if (state.strikeAnimation <= 0) {
+          state.strikeAnimation = strikeConfig.duration;
+          state.strikeResolved = false;
+        }
       }
       return;
     }
@@ -4331,7 +4361,7 @@ function onPointerDown(event) {
   }
 
   if (!state.isOnPhone) {
-    setMessage("Kliv upp pa telefonen och hall inne musen for att borja pressa.");
+    performStrike();
     return;
   }
 
@@ -4339,6 +4369,7 @@ function onPointerDown(event) {
   poopHoldState.isPointerDown = true;
   poopHoldState.holdTime = 0;
   poopHoldState.started = false;
+  poopHoldState.tapStrikeArmed = true;
 }
 
 function onPointerMove(event) {
@@ -4355,6 +4386,14 @@ function onPointerMove(event) {
 function onPointerUp(event) {
   if (poopHoldState.pointerId !== null && event.pointerId !== poopHoldState.pointerId) {
     return;
+  }
+
+  const shouldTapStrike =
+    poopHoldState.tapStrikeArmed &&
+    !poopHoldState.started &&
+    poopHoldState.holdTime < poopConfig.holdThreshold;
+  if (shouldTapStrike) {
+    performStrike();
   }
 
   stopPoopHold();
@@ -4427,6 +4466,7 @@ function stopPoopHold(reason = "release") {
   poopHoldState.isPointerDown = false;
   poopHoldState.holdTime = 0;
   poopHoldState.started = false;
+  poopHoldState.tapStrikeArmed = false;
 
   if (activePoopRope) {
     activePoopRope.isGrowing = false;
@@ -4463,6 +4503,7 @@ function updatePoopHold(delta) {
   }
 
   poopHoldState.started = true;
+  poopHoldState.tapStrikeArmed = false;
   activePoopRope = createPoopRope(hero.buttAnchor.getWorldPosition(tempVecA).clone());
   poopRopes.push(activePoopRope);
   trimPoopRopes();
@@ -4471,21 +4512,17 @@ function updatePoopHold(delta) {
 }
 
 function performStrike() {
-  if (state.gameOver || state.cooldown > 0) {
+  if (state.gameOver || state.cooldown > 0 || state.playerPhase !== MATCH_PHASES.active) {
     return;
   }
 
-  tempVecH.copy(standingTarget.root.position).sub(state.playerPosition).setY(0);
-  if (tempVecH.lengthSq() > 0.01) {
-    const strikeYaw = Math.atan2(tempVecH.x, tempVecH.z);
-    state.playerYaw = dampAngle(state.playerYaw, strikeYaw, strikeConfig.playerTurnSnap);
-  }
+  state.playerYaw = dampAngle(state.playerYaw, state.cameraYaw, 0.58);
 
   state.cooldown = strikeConfig.cooldown;
   state.strikeAnimation = strikeConfig.duration;
   state.strikeResolved = false;
   multiplayer.sendAction(ACTION_KINDS.strike);
-  setMessage("Du laddar upp en rak höger mot öken-gubben.");
+  setMessage("Du skickar ivag en rak hoger.");
 }
 
 function getStrikeImpact() {
@@ -4514,6 +4551,76 @@ function getStrikeImpact() {
   };
 }
 
+function getRemotePlayerStrikeImpact() {
+  if (!multiplayerState.remotePlayers.size) {
+    return null;
+  }
+
+  const strikeOrigin = hero.strikeAnchor.getWorldPosition(tempVecA);
+  const strikeForward = tempVecR
+    .set(Math.sin(state.playerYaw), 0, Math.cos(state.playerYaw))
+    .normalize();
+  const maxRange = strikeConfig.range + handStrikeConfig.playerRangePadding;
+  const minForwardDot = Math.cos(handStrikeConfig.playerConeRadians * 0.5);
+
+  let bestHit = null;
+  let bestScore = Number.POSITIVE_INFINITY;
+
+  for (const remotePlayer of multiplayerState.remotePlayers.values()) {
+    if (remotePlayer.playerPhase !== MATCH_PHASES.active || !remotePlayer.avatar.root.visible) {
+      continue;
+    }
+
+    const targetCenter = remotePlayer.avatar.root.getWorldPosition(tempVecB);
+    targetCenter.y += 0.9;
+
+    const toTarget = tempVecC.copy(targetCenter).sub(strikeOrigin);
+    if (Math.abs(toTarget.y) > handStrikeConfig.playerHeightTolerance) {
+      continue;
+    }
+
+    const planarToTarget = tempVecD.copy(toTarget).setY(0);
+    const planarDistance = planarToTarget.length();
+    if (planarDistance > maxRange) {
+      continue;
+    }
+
+    let forwardDot = 1;
+    if (planarDistance > 0.0001) {
+      forwardDot = tempVecS.copy(planarToTarget).multiplyScalar(1 / planarDistance).dot(strikeForward);
+      if (forwardDot < minForwardDot) {
+        continue;
+      }
+    }
+
+    const score = planarDistance - forwardDot * 0.35;
+    if (score >= bestScore) {
+      continue;
+    }
+
+    bestScore = score;
+
+    const impactPoint = targetCenter.clone();
+    impactPoint.y += 0.06;
+
+    const impactVelocity = planarToTarget.clone();
+    if (impactVelocity.lengthSq() > 0.0001) {
+      impactVelocity.normalize();
+    } else {
+      impactVelocity.copy(strikeForward);
+    }
+    impactVelocity.multiplyScalar(handStrikeConfig.impactSpeed + state.moveAmount * 4);
+
+    bestHit = {
+      playerId: remotePlayer.id,
+      impactPoint,
+      impactVelocity,
+    };
+  }
+
+  return bestHit;
+}
+
 function updateStrike(delta) {
   if (state.strikeAnimation <= 0) {
     return;
@@ -4523,13 +4630,28 @@ function updateStrike(delta) {
   const progress = 1 - state.strikeAnimation / strikeConfig.duration;
   if (!state.strikeResolved && progress >= 0.46) {
     state.strikeResolved = true;
-    const impact = getStrikeImpact();
-    if (impact) {
-      registerTargetHit(impact.impactPoint, impact.impactVelocity);
+    
+    if (multiplayerState.menuOpen || state.playerPhase === MATCH_PHASES.staging || state.playerPhase === MATCH_PHASES.countdown) {
+      const impact = getStrikeImpact();
+      if (impact) {
+        applyTargetHitVisuals(impact.impactPoint, impact.impactVelocity);
+      }
       return;
     }
 
-    registerMiss("Slaget ven bara ut i luften. Gubben står fortfarande ute i öknen.");
+    const playerImpact = getRemotePlayerStrikeImpact();
+    if (playerImpact) {
+      registerPlayerHit(playerImpact);
+      return;
+    }
+
+    const targetImpact = getStrikeImpact();
+    if (targetImpact) {
+      registerTargetHit(targetImpact.impactPoint, targetImpact.impactVelocity);
+      return;
+    }
+
+    registerMiss("Slaget ven bara ut i luften. Ingen tog en fulltraff.");
   }
 }
 
@@ -4728,8 +4850,13 @@ function updatePlayer(delta) {
     state.isOnPhone = state.grounded && isStandingOnPhone(state.playerPosition);
   }
 
-  hero.root.position.copy(state.playerPosition);
-  hero.root.rotation.y = state.playerYaw;
+  if (multiplayerState.menuOpen) {
+    hero.root.position.set(standingTargetPosition.x - 1.8, 0, standingTargetPosition.z + 1.2);
+    hero.root.rotation.y = Math.atan2(1.8, -1.2);
+  } else {
+    hero.root.position.copy(state.playerPosition);
+    hero.root.rotation.y = state.playerYaw;
+  }
 
   const walkSwing = Math.sin(state.walkCycle) * state.moveAmount;
   const counterSwing = Math.sin(state.walkCycle + Math.PI) * state.moveAmount;
@@ -4744,7 +4871,7 @@ function updatePlayer(delta) {
       ? Math.sin((1 - state.poopAnimation / 0.34) * Math.PI)
       : 0;
   const strikeProgress =
-    state.playerPhase === MATCH_PHASES.active && state.strikeAnimation > 0
+    (state.playerPhase === MATCH_PHASES.active || multiplayerState.menuOpen || state.playerPhase === MATCH_PHASES.staging || state.playerPhase === MATCH_PHASES.countdown) && state.strikeAnimation > 0
       ? 1 - state.strikeAnimation / strikeConfig.duration
       : 0;
   const strikePose = state.strikeAnimation > 0 ? Math.sin(strikeProgress * Math.PI) : 0;
@@ -4759,8 +4886,7 @@ function updatePlayer(delta) {
   hero.torso.rotation.x = -state.moveAmount * 0.08 - jumpLean + poopPose * 0.2;
   hero.torso.rotation.y = -strikeTwist * 0.34;
   hero.torso.position.y =
-    Math.abs(Math.sin(state.walkCycle * 2)) * state.moveAmount * 0.08 +
-    state.playerPosition.y * 0.08 -
+    Math.abs(Math.sin(state.walkCycle * 2)) * state.moveAmount * 0.08 -
     poopPose * 0.08;
   hero.headPivot.rotation.y = Math.sin(clock.elapsedTime * 0.8) * 0.1 + strikeTwist * 0.18;
   hero.headPivot.rotation.x = -0.05 + Math.cos(clock.elapsedTime * 1.4) * 0.02 - poopPose * 0.04;
@@ -4773,7 +4899,7 @@ function updatePlayer(delta) {
     hero.leftLeg.rotation.x = 0.34;
     hero.rightLeg.rotation.x = 0.34;
     hero.torso.rotation.x = -0.1;
-    hero.torso.position.y = state.playerPosition.y * 0.08 + Math.sin(clock.elapsedTime * 3) * 0.02;
+    hero.torso.position.y = Math.sin(clock.elapsedTime * 3) * 0.02;
   } else if (state.playerPhase === MATCH_PHASES.glide) {
     hero.leftArm.rotation.x = -1.22;
     hero.rightArm.rotation.x = -1.22;
@@ -4782,7 +4908,7 @@ function updatePlayer(delta) {
     hero.leftLeg.rotation.x = 0.16;
     hero.rightLeg.rotation.x = 0.16;
     hero.torso.rotation.x = -0.22;
-    hero.torso.position.y = state.playerPosition.y * 0.08;
+    hero.torso.position.y = 0;
   }
 }
 
@@ -5583,6 +5709,34 @@ function registerTargetHit(impactPoint, velocity, options = {}) {
   updateHud();
 }
 
+function registerPlayerHit(hit, options = {}) {
+  createImpactBurst(hit.impactPoint, hit.impactVelocity);
+  if (options.broadcast !== false) {
+    multiplayer.sendWorldEvent(WORLD_EVENT_KINDS.playerHit, {
+      targetPlayerId: hit.playerId,
+      impactPoint: hit.impactPoint,
+      velocity: hit.impactVelocity,
+    });
+  }
+
+  const targetName = multiplayerState.playerRoster.get(hit.playerId)?.name ?? "spelaren";
+  setMessage(`Smack. Du traffade ${targetName} med handen.`);
+}
+
+function applyHandStrikeDamage(attackerName = "En spelare") {
+  if (state.gameOver || state.playerPhase !== MATCH_PHASES.active) {
+    return;
+  }
+
+  state.hemorrhoids = THREE.MathUtils.clamp(
+    state.hemorrhoids + handStrikeConfig.hemorrhoidDamage,
+    0,
+    100,
+  );
+  setMessage(`${attackerName} traffade dig med handen. Hemorojdrisken okade lite.`);
+  updateHud();
+}
+
 function updateHemorrhoids(delta) {
   if (state.gameOver) {
     state.resetTimer -= delta;
@@ -5992,7 +6146,7 @@ function animate() {
   updateHud();
 
   const isMenuPhase = state.playerPhase === MATCH_PHASES.staging || state.playerPhase === MATCH_PHASES.countdown;
-  hero.root.visible = !isMenuPhase && state.playerPhase !== MATCH_PHASES.bus;
+  hero.root.visible = multiplayerState.menuOpen || (!isMenuPhase && state.playerPhase !== MATCH_PHASES.bus);
   remotePlayersRoot.visible = !isMenuPhase;
   document.body.classList.toggle("staging-lobby", isMenuPhase && multiplayerState.joined);
 
