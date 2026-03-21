@@ -534,26 +534,6 @@ body.menu-open #scene {
   letter-spacing: 1px;
 }
 
-.message-banner {
-  position: absolute;
-  left: 50%;
-  bottom: 1.6rem;
-  transform: translateX(-50%);
-  z-index: 4;
-  width: min(46rem, calc(100vw - 2rem));
-  padding: 0.9rem 1.1rem;
-  border-radius: 16px;
-  background: linear-gradient(180deg, rgba(15,21,33,0.9), rgba(9,13,22,0.78));
-  border: 2px solid rgba(255,255,255,0.14);
-  color: rgba(255,255,255,0.95);
-  font-weight: 800;
-  text-align: center;
-  letter-spacing: 0.3px;
-  box-shadow: 0 18px 38px rgba(0,0,0,0.25);
-  backdrop-filter: blur(8px);
-  pointer-events: none;
-}
-
 .network-card {
   position: absolute;
   right: 1.2rem;
@@ -611,10 +591,6 @@ body.menu-open #scene {
     justify-content: center;
   }
   .jump-prompt__text {
-    font-size: 0.95rem;
-  }
-  .message-banner {
-    bottom: 1rem;
     font-size: 0.95rem;
   }
 }

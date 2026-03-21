@@ -22,7 +22,6 @@ import {
 } from "../shared/multiplayer.js";
 
 const canvas = document.querySelector("#scene");
-const messageEl = document.querySelector("#message");
 const hitsEl = document.querySelector("#hits");
 const comboEl = document.querySelector("#combo");
 const scoreEl = document.querySelector("#score");
@@ -283,7 +282,6 @@ const state = {
   combo: 0,
   gameOver: false,
   resetTimer: 0,
-  message: "",
   isOnPhone: false,
   poopAnimation: 0,
   strikeAnimation: 0,
@@ -5710,12 +5708,7 @@ function updateHud() {
   }
 }
 
-function setMessage(text) {
-  state.message = "";
-  if (messageEl) {
-    messageEl.textContent = "";
-  }
-}
+function setMessage() {}
 
 function updateSmoke(delta) {
   smokeSpawnTimer = Math.min(
