@@ -24,7 +24,10 @@ html, body {
 
 body.menu-open,
 body.menu-open #app,
-body.menu-open #scene {
+body.menu-open #scene,
+body.staging-lobby,
+body.staging-lobby #app,
+body.staging-lobby #scene {
   cursor: default;
 }
 
@@ -218,6 +221,12 @@ body.menu-open #scene {
   background: #5cff8f;
 }
 
+.match-leave-btn {
+  width: 100%;
+  margin-top: 1.5rem;
+  font-size: 1.3rem;
+}
+
 /* IN-GAME HUD */
 .hud {
   position: absolute;
@@ -392,25 +401,26 @@ body.menu-open #scene {
 
 .match-panel {
   position: absolute;
-  left: 1.2rem;
-  top: 8.8rem;
-  width: min(24rem, calc(100vw - 2.4rem));
-  z-index: 4;
-  padding: 1rem 1rem 1.1rem;
-  background:
-    linear-gradient(180deg, rgba(20, 36, 62, 0.92), rgba(10, 17, 29, 0.88));
-  border: 3px solid rgba(255,255,255,0.28);
-  border-radius: 18px;
-  box-shadow: 0 22px 45px rgba(0,0,0,0.35);
-  backdrop-filter: blur(12px);
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(36rem, 90vw);
+  z-index: 10;
+  padding: 2.5rem;
+  background: rgba(0, 0, 0, 0.75);
+  border: 4px solid var(--fn-text);
+  border-radius: 16px;
+  box-shadow: 8px 8px 0px rgba(0,0,0,0.5);
+  backdrop-filter: blur(10px);
+  text-align: center;
 }
 
 .match-panel__top {
   display: flex;
-  justify-content: space-between;
+  justify-content: center;
   align-items: center;
-  gap: 0.75rem;
-  margin-bottom: 0.6rem;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
 }
 
 .match-phase-label,
@@ -419,9 +429,10 @@ body.menu-open #scene {
   align-items: center;
   justify-content: center;
   border-radius: 999px;
-  padding: 0.3rem 0.8rem;
+  padding: 0.5rem 1rem;
   font-weight: 900;
   letter-spacing: 1px;
+  font-size: 1.2rem;
 }
 
 .match-phase-label {
@@ -435,39 +446,41 @@ body.menu-open #scene {
   color: #141414;
   border: 2px solid rgba(0,0,0,0.85);
   font-family: "Luckiest Guy", cursive;
-  font-size: 1.1rem;
+  font-size: 1.4rem;
 }
 
 .match-panel h2 {
   margin: 0;
   color: #fff;
   font-family: "Luckiest Guy", cursive;
-  font-size: 2.05rem;
-  letter-spacing: 1px;
-  text-shadow: 2px 2px 0 rgba(0,0,0,0.85);
+  font-size: 3.2rem;
+  letter-spacing: 2px;
+  text-shadow: 4px 4px 0 rgba(0,0,0,0.85);
 }
 
 .match-panel p {
-  margin: 0.35rem 0 0;
-  color: rgba(255,255,255,0.88);
-  font-weight: 700;
+  margin: 0.5rem 0 2rem;
+  color: rgba(255,255,255,0.9);
+  font-weight: 900;
   line-height: 1.4;
+  font-size: 1.2rem;
 }
 
 .lobby-player-list {
   display: grid;
-  gap: 0.55rem;
+  gap: 0.8rem;
+  text-align: left;
 }
 
 .lobby-player {
   display: grid;
   grid-template-columns: auto 1fr auto;
   align-items: center;
-  gap: 0.7rem;
-  padding: 0.65rem 0.8rem;
-  border-radius: 14px;
-  background: rgba(255,255,255,0.08);
-  border: 2px solid rgba(255,255,255,0.08);
+  gap: 1rem;
+  padding: 0.8rem 1rem;
+  border-radius: 12px;
+  background: rgba(0,0,0,0.4);
+  border: 2px solid rgba(255,255,255,0.15);
 }
 
 .lobby-player__swatch {
@@ -577,9 +590,9 @@ body.menu-open #scene {
   .fn-button { font-size: 1.5rem; }
   .fn-scoreboard { flex-direction: column; gap: 0.5rem; }
   .match-panel {
-    top: auto;
-    bottom: 10rem;
-    width: calc(100vw - 2rem);
+    top: 50%;
+    bottom: auto;
+    width: min(28rem, calc(100vw - 2rem));
   }
   .network-card {
     top: 1rem;

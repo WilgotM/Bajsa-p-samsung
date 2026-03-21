@@ -44,8 +44,19 @@ const jumpPromptEl = document.querySelector("#jump-prompt");
 const pauseMenuEl = document.querySelector("#pause-menu");
 const resumeBtn = document.querySelector("#resume-btn");
 const quitBtn = document.querySelector("#quit-btn");
+const leaveLobbyBtn = document.querySelector("#leave-lobby-btn");
 
 let isPaused = false;
+
+if (leaveLobbyBtn) {
+  leaveLobbyBtn.addEventListener("click", () => {
+    setMenuOpen(true);
+    multiplayer.disconnect(true);
+    if (document.pointerLockElement) {
+      document.exitPointerLock();
+    }
+  });
+}
 
 if (resumeBtn) {
   resumeBtn.addEventListener("click", () => {
@@ -706,7 +717,8 @@ function syncMatchPanel(now = Date.now()) {
   const playerCount = multiplayerState.matchState.playerCount ?? 0;
   const readyCount = multiplayerState.matchState.readyCount ?? 0;
 
-  matchPanelEl.classList.toggle("hidden", !multiplayerState.joined || multiplayerState.menuOpen);
+  const isLobbyPhase = lobbyPhase === MATCH_PHASES.staging || lobbyPhase === MATCH_PHASES.countdown;
+  matchPanelEl.classList.toggle("hidden", !multiplayerState.joined || multiplayerState.menuOpen || !isLobbyPhase);
   if (matchPhaseLabelEl) {
     matchPhaseLabelEl.textContent = getMatchPhaseLabel(
       state.playerPhase === MATCH_PHASES.glide ? MATCH_PHASES.glide : lobbyPhase,
@@ -776,6 +788,14 @@ function syncMatchPanel(now = Date.now()) {
     readyBtn.disabled = !showReady;
     readyBtn.textContent = state.localReady ? "UNREADY" : "READY";
     readyBtn.classList.toggle("is-ready", state.localReady);
+  }
+
+  if (leaveLobbyBtn) {
+    const showLeave =
+      multiplayerState.joined &&
+      !multiplayerState.menuOpen &&
+      (lobbyPhase === MATCH_PHASES.staging || lobbyPhase === MATCH_PHASES.countdown);
+    leaveLobbyBtn.classList.toggle("hidden", !showLeave);
   }
 }
 
@@ -1068,95 +1088,7 @@ function setupWorld() {
 }
 
 function addStagingLobby() {
-  const pad = new THREE.Mesh(
-    new THREE.BoxGeometry(stagingPlatform.halfX * 2, 0.52, stagingPlatform.halfZ * 2),
-    new THREE.MeshStandardMaterial({
-      color: 0x223449,
-      roughness: 0.72,
-      metalness: 0.18,
-    }),
-  );
-  pad.position.copy(stagingPlatform.center);
-  pad.receiveShadow = true;
-  pad.castShadow = true;
-  scene.add(pad);
-  registerRectGroundSupport({
-    position: pad.position,
-    width: stagingPlatform.halfX * 2,
-    depth: stagingPlatform.halfZ * 2,
-    height: stagingPlatform.height,
-  });
-
-  const trim = new THREE.Mesh(
-    new THREE.BoxGeometry(stagingPlatform.halfX * 2 + 0.8, 0.12, stagingPlatform.halfZ * 2 + 0.8),
-    new THREE.MeshStandardMaterial({
-      color: 0xf7d62f,
-      roughness: 0.28,
-      metalness: 0.32,
-      emissive: 0xcda500,
-      emissiveIntensity: 0.2,
-    }),
-  );
-  trim.position.set(stagingPlatform.center.x, stagingPlatform.height + 0.04, stagingPlatform.center.z);
-  trim.receiveShadow = true;
-  scene.add(trim);
-
-  const hologram = new THREE.Mesh(
-    new THREE.CylinderGeometry(5.4, 5.4, 0.06, 48),
-    new THREE.MeshBasicMaterial({
-      color: 0x61d7ff,
-      transparent: true,
-      opacity: 0.24,
-    }),
-  );
-  hologram.position.set(stagingPlatform.center.x, stagingPlatform.height + 0.08, stagingPlatform.center.z);
-  scene.add(hologram);
-
-  const banner = new THREE.Mesh(
-    new THREE.BoxGeometry(7.4, 2.2, 0.28),
-    new THREE.MeshStandardMaterial({
-      color: 0x1d2941,
-      roughness: 0.42,
-      metalness: 0.16,
-      emissive: 0x0f1729,
-      emissiveIntensity: 0.18,
-    }),
-  );
-  banner.position.set(stagingPlatform.center.x, stagingPlatform.height + 3.6, stagingPlatform.center.z - 7.9);
-  banner.castShadow = true;
-  scene.add(banner);
-
-  const lightPostGeometry = new THREE.CylinderGeometry(0.12, 0.16, 4.8, 12);
-  const lightMaterial = new THREE.MeshStandardMaterial({
-    color: 0x394250,
-    roughness: 0.84,
-    metalness: 0.12,
-  });
-  const lightGlowMaterial = new THREE.MeshBasicMaterial({
-    color: 0xfcee0a,
-    transparent: true,
-    opacity: 0.72,
-  });
-  const corners = [
-    [-stagingPlatform.halfX + 1.2, -stagingPlatform.halfZ + 1.2],
-    [stagingPlatform.halfX - 1.2, -stagingPlatform.halfZ + 1.2],
-    [-stagingPlatform.halfX + 1.2, stagingPlatform.halfZ - 1.2],
-    [stagingPlatform.halfX - 1.2, stagingPlatform.halfZ - 1.2],
-  ];
-  corners.forEach(([offsetX, offsetZ]) => {
-    const post = new THREE.Mesh(lightPostGeometry, lightMaterial);
-    post.position.set(
-      stagingPlatform.center.x + offsetX,
-      stagingPlatform.height + 2.2,
-      stagingPlatform.center.z + offsetZ,
-    );
-    post.castShadow = true;
-    scene.add(post);
-
-    const glow = new THREE.Mesh(new THREE.SphereGeometry(0.32, 14, 14), lightGlowMaterial);
-    glow.position.set(post.position.x, post.position.y + 2.3, post.position.z);
-    scene.add(glow);
-  });
+  // Staging platform meshes removed so it's just a UI menu. The logic inside keepInsideStagingPlatform keeps players physically stable instead.
 }
 
 function addLegacyMapPlate() {
@@ -4273,6 +4205,21 @@ function onPointerDown(event) {
   }
 
   if (!isPointerLocked()) {
+    if (state.playerPhase === MATCH_PHASES.staging || state.playerPhase === MATCH_PHASES.countdown) {
+      const mouse = new THREE.Vector2();
+      mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+      mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+      raycaster.setFromCamera(mouse, camera);
+      const intersects = raycaster.intersectObject(standingTarget.root, true);
+      if (intersects.length > 0) {
+        applyTargetHitVisuals(intersects[0].point, new THREE.Vector3(0, 5, -12));
+        standingTarget.state.hitFlash = 3;
+        standingTarget.state.wobbleVelocity += 12;
+        standingTarget.state.menuSpin = (standingTarget.state.menuSpin || 0) + Math.PI * 2;
+      }
+      return;
+    }
+
     canvas.requestPointerLock();
     return;
   }
@@ -5853,6 +5800,11 @@ function animate() {
   syncAnnouncementPrompts(nowDate);
   syncMatchPanel(nowDate);
   updateHud();
+
+  const isMenuPhase = state.playerPhase === MATCH_PHASES.staging || state.playerPhase === MATCH_PHASES.countdown;
+  hero.root.visible = !isMenuPhase;
+  remotePlayersRoot.visible = !isMenuPhase;
+  document.body.classList.toggle("staging-lobby", isMenuPhase && multiplayerState.joined);
 
   renderer.render(scene, camera);
 }
