@@ -31,9 +31,9 @@ import {
 } from "../shared/multiplayer.js";
 
 const canvas = document.querySelector("#scene");
-const hitsEl = document.querySelector("#hits");
-const comboEl = document.querySelector("#combo");
-const scoreEl = document.querySelector("#score");
+const leaderboardEl = document.querySelector("#leaderboard");
+const leaderboardEntriesEl = document.querySelector("#leaderboard-entries");
+const leaderboardHeadCache = new Map();
 const meterTextEl = document.querySelector("#meter-text");
 const meterFillEl = document.querySelector("#meter-fill");
 const gameOverEl = document.querySelector("#game-over");
@@ -347,9 +347,7 @@ const state = {
   verticalVelocity: 0,
   grounded: true,
   hemorrhoids: 0,
-  score: 0,
-  hits: 0,
-  combo: 0,
+  totalPoopLength: 0,
   gameOver: false,
   resetTimer: 0,
   isOnPhone: false,
@@ -3628,9 +3626,7 @@ function resetRoundState() {
   state.verticalVelocity = 0;
   state.grounded = true;
   state.hemorrhoids = 0;
-  state.score = 0;
-  state.hits = 0;
-  state.combo = 0;
+  state.totalPoopLength = 0;
   state.gameOver = false;
   state.resetTimer = 0;
   state.isOnPhone = false;
@@ -3650,6 +3646,7 @@ function resetRoundState() {
 
 function positionPlayerForPhase(phase, options = {}) {
   const now = options.now ?? Date.now();
+  const isInitialEntry = !options._busFrameUpdate;
   if (phase === MATCH_PHASES.bus) {
     const seatPosition = getBusSeatWorldPosition(
       multiplayerState.playerRoster.get(multiplayerState.selfId)?.guestIndex ?? 0,
@@ -3659,8 +3656,10 @@ function positionPlayerForPhase(phase, options = {}) {
     const busYaw = getBusTransform(now).yaw;
     state.playerPosition.copy(seatPosition);
     state.playerYaw = busYaw;
-    state.cameraYaw = busYaw;
-    state.cameraPitch = -0.18;
+    if (isInitialEntry) {
+      state.cameraYaw = busYaw;
+      state.cameraPitch = -0.18;
+    }
     hero.root.position.copy(state.playerPosition);
     hero.root.rotation.y = state.playerYaw;
     return;
@@ -3696,6 +3695,9 @@ function enterLocalBusPhase(broadcast = true) {
     multiplayer.sendPlayerState(MATCH_PHASES.bus);
   }
   syncMatchPanel();
+  if (!isPointerLocked()) {
+    canvas.requestPointerLock();
+  }
 }
 
 function enterLocalGlidePhase(broadcast = true, isAutoDrop = false) {
@@ -4587,7 +4589,7 @@ function updatePlayer(delta) {
 
   if (state.playerPhase === MATCH_PHASES.bus) {
     const busNow = Date.now();
-    positionPlayerForPhase(MATCH_PHASES.bus, { now: busNow });
+    positionPlayerForPhase(MATCH_PHASES.bus, { now: busNow, _busFrameUpdate: true });
     state.moveAmount = THREE.MathUtils.lerp(state.moveAmount, 0, 1 - Math.exp(-delta * 8));
     state.walkCycle += delta * 2.2;
     state.grounded = false;
@@ -4866,18 +4868,25 @@ function updateCamera(delta) {
 
   if (state.playerPhase === MATCH_PHASES.bus) {
     const transform = getBusTransform(Date.now());
-    const right = tempVecA.set(-transform.direction.z, 0, transform.direction.x).normalize();
+    const busCamDistance = 9.5;
+    const busCamLift = 3.2;
+    const flatForwardBus = tempVecA.set(
+      Math.sin(state.cameraYaw),
+      0,
+      Math.cos(state.cameraYaw),
+    ).normalize();
     const desiredPosition = tempVecB
       .copy(transform.position)
-      .addScaledVector(transform.direction, -7.8)
-      .addScaledVector(right, 3.2)
-      .add(tempVecC.set(0, 2.9, 0));
-    const lookAt = tempVecD
-      .copy(transform.position)
-      .addScaledVector(transform.direction, busConfig.lookAhead)
-      .add(tempVecE.set(0, 0.8, 0));
+      .addScaledVector(flatForwardBus, -busCamDistance)
+      .add(tempVecC.set(0, busCamLift, 0));
+    const lookDirection = tempVecD.set(
+      Math.sin(state.cameraYaw) * Math.cos(state.cameraPitch),
+      Math.sin(state.cameraPitch),
+      Math.cos(state.cameraYaw) * Math.cos(state.cameraPitch),
+    ).normalize();
+    const lookTarget = tempVecE.copy(transform.position).addScaledVector(lookDirection, busConfig.lookAhead);
     camera.position.lerp(desiredPosition, 1 - Math.exp(-delta * 4.8));
-    camera.lookAt(lookAt);
+    camera.lookAt(lookTarget);
     return;
   }
 
@@ -5494,20 +5503,11 @@ function createSplat(position, onPhone) {
 }
 
 function registerHit() {
-  state.hits += 1;
-  state.combo += 1;
-  state.score += 22 + state.combo * 8;
-  setMessage(
-    state.combo > 1
-      ? `Rak svit x${state.combo}. Glaset drunknar nu på riktigt.`
-      : "Rak träff på skärmen. Det blev vidrigt direkt.",
-  );
+  setMessage("Rak träff på skärmen. Det blev vidrigt direkt.");
   updateHud();
 }
 
 function registerMiss(message = "Miss. Bara marken fick ta smallen.") {
-  state.combo = 0;
-  state.score = Math.max(0, state.score - 5);
   setMessage(message);
   updateHud();
 }
@@ -5536,7 +5536,7 @@ function registerTargetHit(impactPoint, velocity, options = {}) {
     });
   }
 
-  state.combo = 0;
+
   state.hemorrhoids = THREE.MathUtils.clamp(
     state.hemorrhoids - (6 + hitForce * 0.8),
     0,
@@ -5691,28 +5691,169 @@ function triggerGameOver() {
   gameOverEl.classList.remove("hidden");
 }
 
+function measureRopeLength(rope) {
+  if (!rope || rope.points.length < 2) {
+    return 0;
+  }
+  let length = 0;
+  for (let i = 1; i < rope.points.length; i++) {
+    length += rope.points[i].position.distanceTo(rope.points[i - 1].position);
+  }
+  return length;
+}
+
+function getLocalTotalPoopLength() {
+  let total = 0;
+  for (const rope of poopRopes) {
+    if (rope === activePoopRope || !multiplayerState.remotePlayers.size) {
+      let isRemote = false;
+      for (const rp of multiplayerState.remotePlayers.values()) {
+        if (rp.rope === rope) {
+          isRemote = true;
+          break;
+        }
+      }
+      if (!isRemote) {
+        total += measureRopeLength(rope);
+      }
+    } else {
+      let isRemote = false;
+      for (const rp of multiplayerState.remotePlayers.values()) {
+        if (rp.rope === rope) {
+          isRemote = true;
+          break;
+        }
+      }
+      if (!isRemote) {
+        total += measureRopeLength(rope);
+      }
+    }
+  }
+  return total;
+}
+
+function getRemotePoopLength(remotePlayer) {
+  if (!remotePlayer.rope) {
+    return 0;
+  }
+  return measureRopeLength(remotePlayer.rope);
+}
+
+function getOrLoadSkinImage(skinDataUrl) {
+  const url = skinDataUrl || DEFAULT_SKIN_DATA_URL;
+  let img = leaderboardHeadCache.get(url);
+  if (!img) {
+    img = new Image();
+    img.src = url;
+    leaderboardHeadCache.set(url, img);
+  }
+  return img;
+}
+
+function renderLeaderboard() {
+  if (!leaderboardEntriesEl || !leaderboardEl) {
+    return;
+  }
+
+  const isActive = state.playerPhase === MATCH_PHASES.active ||
+    state.playerPhase === MATCH_PHASES.glide;
+  if (!isActive || !multiplayerState.joined) {
+    leaderboardEl.classList.add("hidden");
+    return;
+  }
+  leaderboardEl.classList.remove("hidden");
+
+  const entries = [];
+
+  const localLength = getLocalTotalPoopLength();
+  state.totalPoopLength = localLength;
+  const localSkin = playerProfile.skinDataUrl || DEFAULT_SKIN_DATA_URL;
+  entries.push({
+    id: multiplayerState.selfId || "_local",
+    name: multiplayerState.selfName || playerProfile.name || "Du",
+    skinDataUrl: localSkin,
+    length: localLength,
+    isSelf: true,
+  });
+
+  for (const [id, rp] of multiplayerState.remotePlayers) {
+    entries.push({
+      id,
+      name: rp.name || "Spelare",
+      skinDataUrl: rp.skinDataUrl || DEFAULT_SKIN_DATA_URL,
+      length: getRemotePoopLength(rp),
+      isSelf: false,
+    });
+  }
+
+  entries.sort((a, b) => b.length - a.length);
+
+  const existingChildren = leaderboardEntriesEl.children;
+  while (existingChildren.length > entries.length) {
+    leaderboardEntriesEl.removeChild(existingChildren[existingChildren.length - 1]);
+  }
+
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i];
+    let row = existingChildren[i];
+    if (!row) {
+      row = document.createElement("div");
+      row.className = "lb-entry";
+      row.innerHTML =
+        '<span class="lb-rank"></span>' +
+        '<canvas class="lb-head" width="32" height="32"></canvas>' +
+        '<span class="lb-name"></span>' +
+        '<span class="lb-length"></span>';
+      leaderboardEntriesEl.appendChild(row);
+    }
+
+    const rankClasses = ["lb-entry"];
+    if (entry.isSelf) rankClasses.push("lb-entry--self");
+    if (i === 0) rankClasses.push("lb-entry--first");
+    row.className = rankClasses.join(" ");
+
+    const rankEl = row.children[0];
+    const headCanvas = row.children[1];
+    const nameEl = row.children[2];
+    const lengthEl = row.children[3];
+
+    const rankText = `#${i + 1}`;
+    if (rankEl.textContent !== rankText) {
+      rankEl.textContent = rankText;
+    }
+
+    const img = getOrLoadSkinImage(entry.skinDataUrl);
+    const hctx = headCanvas.getContext("2d");
+    hctx.imageSmoothingEnabled = false;
+    hctx.clearRect(0, 0, 32, 32);
+    if (img.complete && img.naturalWidth > 0) {
+      hctx.drawImage(img, 8, 8, 8, 8, 0, 0, 32, 32);
+      hctx.drawImage(img, 40, 8, 8, 8, 0, 0, 32, 32);
+    }
+
+    const displayName = entry.isSelf ? `${entry.name} (du)` : entry.name;
+    if (nameEl.textContent !== displayName) {
+      nameEl.textContent = displayName;
+    }
+
+    const lengthValue = entry.length < 10
+      ? entry.length.toFixed(1)
+      : Math.round(entry.length).toString();
+    const lengthDisplay = `${lengthValue}m`;
+    if (lengthEl.textContent !== lengthDisplay) {
+      lengthEl.textContent = lengthDisplay;
+    }
+  }
+}
+
 function updateHud() {
-  const nextHits = String(state.hits);
-  if (hitsEl.textContent !== nextHits) {
-    hitsEl.textContent = nextHits;
-  }
-
-  const nextCombo = `x${state.combo}`;
-  if (comboEl.textContent !== nextCombo) {
-    comboEl.textContent = nextCombo;
-  }
-
-  const nextScore = String(state.score);
-  if (scoreEl.textContent !== nextScore) {
-    scoreEl.textContent = nextScore;
-  }
-
   const hemorrhoidPercent = Math.round(state.hemorrhoids);
   const nextMeterText = `${hemorrhoidPercent}%`;
   if (meterTextEl.textContent !== nextMeterText) {
     meterTextEl.textContent = nextMeterText;
     meterFillEl.style.width = nextMeterText;
   }
+  renderLeaderboard();
 }
 
 function setMessage() {}
