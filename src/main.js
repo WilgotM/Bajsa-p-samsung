@@ -40,7 +40,9 @@ const gameOverEl = document.querySelector("#game-over");
 const lobbyMenuEl = document.querySelector("#lobby-menu");
 const lobbyMenuStatusEl = document.querySelector("#lobby-menu-status");
 const profileToggleBtn = document.querySelector("#profile-toggle-btn");
-const profileEditorEl = document.querySelector("#profile-editor");
+const profileEditorEl = document.querySelector("#profile-modal");
+const profileCloseBtn = document.querySelector("#profile-close-btn");
+const profileSaveBtn = document.querySelector("#profile-save-btn");
 const profileNameInputEl = document.querySelector("#profile-name-input");
 const profileSkinInputEl = document.querySelector("#profile-skin-input");
 const profileResetSkinBtn = document.querySelector("#profile-reset-skin-btn");
@@ -481,8 +483,33 @@ if (readyBtn) {
 }
 if (profileToggleBtn) {
   profileToggleBtn.addEventListener("click", () => {
-    profileEditorEl?.classList.toggle("hidden");
+    profileEditorEl?.classList.remove("hidden");
   });
+}
+function closeProfileModal() {
+  const nameVal = profileNameInputEl.value.trim();
+  if (!nameVal) {
+    showProfileError("Du måste ange ett namn!");
+    return;
+  }
+  
+  const nextName = sanitizePlayerName(nameVal, "");
+  playerProfile.name = nextName;
+  saveStoredPlayerProfile(playerProfile);
+  multiplayerState.selfName = playerProfile.name;
+  setMinecraftAvatarName(hero, multiplayerState.selfName);
+  multiplayer.setProfile(playerProfile);
+  syncLocalRosterState();
+  
+  profileEditorEl?.classList.add("hidden");
+  showProfileError("Stödjer klassiska Minecraft-skins i 64x64 PNG.", false);
+}
+
+if (profileCloseBtn) {
+  profileCloseBtn.addEventListener("click", closeProfileModal);
+}
+if (profileSaveBtn) {
+  profileSaveBtn.addEventListener("click", closeProfileModal);
 }
 if (profileNameInputEl) {
   profileNameInputEl.maxLength = PLAYER_NAME_MAX_LENGTH;
@@ -497,6 +524,13 @@ if (profileResetSkinBtn) {
 
 initializeMultiplayerUi();
 loadBattleBusModel();
+
+setTimeout(() => {
+  if (!playerProfile.name) {
+    profileEditorEl?.classList.remove("hidden");
+  }
+}, 300);
+
 animate();
 
 function createBattleBusRig() {
@@ -3184,7 +3218,7 @@ function setProfileStatus(text, isError = false) {
   }
 
   profileStatusEl.textContent = text;
-  profileStatusEl.classList.toggle("profile-editor__status--error", isError);
+  profileStatusEl.classList.toggle("error", isError);
 }
 
 function drawSkinPreview(skinDataUrl) {
