@@ -25,12 +25,20 @@ Det här är ett litet 3D-webbspel byggt med Vite och Three.js.
 ## Vad som synkas
 
 - Spelarens position, yaw och rörelsehastighet synkas mellan datorer.
-- Spelarens ready-status och nuvarande fas synkas också för väntelobbyn och battle bus-fasen.
+- Spelarens ready-status, namn, Minecraft-skin och nuvarande fas synkas också för väntelobbyn och battle bus-fasen.
 - Gameplay-händelser synkas också, till exempel:
   - `poop-start`
   - `poop-stop`
   - `strike`
   - `target-hit`
+
+## Spelarprofiler och skins
+
+- Startmenyn har en `Skin + namn`-sektion där spelaren kan skriva eget namn.
+- Spelaren kan ladda upp ett eget Minecraft-skin i `PNG`-format.
+- Just nu stöds bara klassiska skins i standardstorleken `64x64`.
+- Klienten skickar namn och skin till Workern via WebSocket och alla i samma lobby ser varandras namn och skins.
+- Avatarerna renderas som Minecraft-liknande blockfigurer med skin-texturen applicerad på både lokal spelare och remote-spelare.
 
 ## Matchstart
 

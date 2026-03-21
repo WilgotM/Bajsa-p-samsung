@@ -69,6 +69,10 @@ export class MultiplayerClient {
     this.lastPoseSentAt = 0;
     this.lastHeartbeatAt = 0;
     this.connectionState = "idle";
+    this.profile = {
+      name: "",
+      skinDataUrl: "",
+    };
   }
 
   setState(connectionState, details = {}) {
@@ -117,6 +121,7 @@ export class MultiplayerClient {
         socket.send(
           JSON.stringify({
             type: "hello",
+            profile: this.profile,
           }),
         );
         resolve();
@@ -209,6 +214,24 @@ export class MultiplayerClient {
       this.onError(message.message ?? "Servern rapporterade ett fel.");
       return;
     }
+  }
+
+  setProfile(profile = {}) {
+    this.profile = {
+      ...this.profile,
+      ...profile,
+    };
+
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      return;
+    }
+
+    this.ws.send(
+      JSON.stringify({
+        type: "profile",
+        profile: this.profile,
+      }),
+    );
   }
 
   sendAction(kind, data = {}) {

@@ -89,6 +89,7 @@ Det viktiga ar ordningen:
 - Lobby-counts via `/api/lobbies`
 - WebSocket-anslutning till Durable Object per lobby
 - Fargkodade remote-spelare
+- Minecraft-liknande spelare med egna namn och uppladdade klassiska 64x64-skins
 - Realtime synk av position, yaw och move amount
 - Interpolation av remote-spelare for mjukare rorelse
 - Reset av lobby-state nar sista spelaren lamnar

@@ -1,4 +1,6 @@
 export const LOBBY_IDS = ["solo", "main", "secondary"];
+export const PLAYER_NAME_MAX_LENGTH = 18;
+export const MAX_SKIN_DATA_URL_LENGTH = 120_000;
 
 export const LOBBY_LABELS = {
   solo: "Solo-lobby",
@@ -16,9 +18,9 @@ export const MAX_PACKET_TELEPORT_DISTANCE = 4;
 export const PLAYER_MIN_Y = -2;
 export const PLAYER_MAX_Y = 12;
 export const COUNTDOWN_DURATION_MS = 10_000;
-export const BUS_FLIGHT_DURATION_MS = 18_000;
-export const BUS_DOORS_OPEN_OFFSET_MS = 5_200;
-export const BUS_AUTO_DROP_OFFSET_MS = 15_400;
+export const BUS_FLIGHT_DURATION_MS = 28_000;
+export const BUS_DOORS_OPEN_OFFSET_MS = 2_500;
+export const BUS_AUTO_DROP_OFFSET_MS = 24_000;
 
 export const MATCH_PHASES = Object.freeze({
   staging: "staging",
@@ -156,6 +158,40 @@ export function isValidLobbyId(lobbyId) {
 
 export function isValidMatchPhase(phase) {
   return Object.values(MATCH_PHASES).includes(phase);
+}
+
+export function sanitizePlayerName(name, fallbackName = "") {
+  if (typeof name !== "string") {
+    return fallbackName;
+  }
+
+  const normalized = name
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, PLAYER_NAME_MAX_LENGTH);
+
+  return normalized || fallbackName;
+}
+
+export function sanitizeSkinDataUrl(skinDataUrl, fallbackSkinDataUrl = "") {
+  if (typeof skinDataUrl !== "string") {
+    return fallbackSkinDataUrl;
+  }
+
+  const trimmed = skinDataUrl.trim();
+  if (!trimmed) {
+    return fallbackSkinDataUrl;
+  }
+
+  if (!trimmed.startsWith("data:image/png;base64,")) {
+    return fallbackSkinDataUrl;
+  }
+
+  if (trimmed.length > MAX_SKIN_DATA_URL_LENGTH) {
+    return fallbackSkinDataUrl;
+  }
+
+  return trimmed;
 }
 
 export function normalizeYaw(yaw) {

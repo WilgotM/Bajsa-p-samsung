@@ -33,6 +33,47 @@
           <h2>VÄLJ LOBBY</h2>
           <p id="lobby-menu-status" class="lobby-menu__status">Hämtar lobby-status...</p>
 
+          <button id="profile-toggle-btn" class="fn-button fn-secondary fn-profile-toggle" type="button">
+            <span class="btn-text">SKIN + NAMN</span>
+            <span class="btn-meta">Byt namn och ladda upp Minecraft-skin</span>
+          </button>
+
+          <div id="profile-editor" class="profile-editor hidden">
+            <div class="profile-editor__preview">
+              <canvas id="skin-preview" class="profile-editor__skin-preview" width="96" height="96"></canvas>
+              <div class="profile-editor__copy">
+                <h3>DIN GUBBE</h3>
+                <p>Stodjer klassiska Minecraft-skins i PNG-format. Just nu bara 64x64.</p>
+              </div>
+            </div>
+
+            <label class="profile-editor__field">
+              <span>Namn</span>
+              <input
+                id="profile-name-input"
+                class="profile-editor__input"
+                type="text"
+                maxlength="18"
+                placeholder="Tomt = slumpnamn fran servern"
+                autocomplete="nickname"
+              />
+            </label>
+
+            <div class="profile-editor__actions">
+              <label class="fn-button fn-primary profile-editor__upload" for="profile-skin-input">
+                <span class="btn-text">LADDA UPP PNG</span>
+                <span class="btn-meta">Valj en Minecraft-skin fran datorn</span>
+              </label>
+              <input id="profile-skin-input" type="file" accept="image/png" hidden />
+              <button id="profile-reset-skin-btn" class="fn-button fn-danger profile-editor__reset" type="button">
+                <span class="btn-text">ATERSTALL</span>
+                <span class="btn-meta">Tillbaka till standardskin</span>
+              </button>
+            </div>
+
+            <p id="profile-status" class="profile-editor__status">Stodjer klassiska Minecraft-skins i 64x64 PNG.</p>
+          </div>
+
           <div class="fn-lobby-grid">
             <button
               id="join-solo"

@@ -161,6 +161,113 @@ body.staging-lobby #scene {
   gap: 1rem;
 }
 
+.fn-profile-toggle {
+  width: 100%;
+  margin-bottom: 1rem;
+}
+
+.profile-editor {
+  display: grid;
+  gap: 1rem;
+  margin-bottom: 1.2rem;
+  padding: 1rem;
+  border-radius: 14px;
+  border: 3px solid rgba(255,255,255,0.18);
+  background:
+    linear-gradient(135deg, rgba(42,183,202,0.16), rgba(252,238,10,0.12)),
+    rgba(0,0,0,0.38);
+  text-align: left;
+}
+
+.profile-editor__preview {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.9rem;
+  align-items: center;
+}
+
+.profile-editor__skin-preview {
+  width: 5.5rem;
+  height: 5.5rem;
+  border-radius: 12px;
+  border: 3px solid rgba(255,255,255,0.75);
+  background:
+    linear-gradient(135deg, rgba(255,255,255,0.18), rgba(255,255,255,0.02)),
+    #131313;
+  image-rendering: pixelated;
+  box-shadow: 0 10px 18px rgba(0,0,0,0.28);
+}
+
+.profile-editor__copy h3 {
+  margin: 0 0 0.35rem;
+  color: #fff;
+  font-family: "Luckiest Guy", cursive;
+  font-size: 1.4rem;
+  letter-spacing: 1px;
+}
+
+.profile-editor__copy p {
+  margin: 0;
+  color: rgba(255,255,255,0.82);
+  font-size: 0.96rem;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.profile-editor__field {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.profile-editor__field span {
+  color: rgba(255,255,255,0.9);
+  font-weight: 900;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  font-size: 0.85rem;
+}
+
+.profile-editor__input {
+  width: 100%;
+  border: 3px solid rgba(255,255,255,0.2);
+  border-radius: 12px;
+  padding: 0.9rem 1rem;
+  background: rgba(8, 12, 18, 0.9);
+  color: #fff;
+  font: inherit;
+  font-weight: 800;
+}
+
+.profile-editor__input:focus {
+  outline: none;
+  border-color: rgba(252,238,10,0.9);
+  box-shadow: 0 0 0 3px rgba(252,238,10,0.18);
+}
+
+.profile-editor__actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.8rem;
+}
+
+.profile-editor__upload,
+.profile-editor__reset {
+  width: 100%;
+}
+
+.profile-editor__status {
+  margin: 0;
+  min-height: 1.4rem;
+  color: #b9f3ff;
+  font-weight: 800;
+  font-size: 0.95rem;
+  line-height: 1.35;
+}
+
+.profile-editor__status--error {
+  color: #ff9d9d;
+}
+
 /* BUTTONS */
 .fn-button {
   appearance: none;
@@ -588,6 +695,14 @@ body.staging-lobby #scene {
   .fn-title { font-size: 3.5rem; }
   .fn-panel h2 { font-size: 2rem; }
   .fn-button { font-size: 1.5rem; }
+  .profile-editor__preview {
+    grid-template-columns: 1fr;
+    justify-items: center;
+    text-align: center;
+  }
+  .profile-editor__actions {
+    grid-template-columns: 1fr;
+  }
   .fn-scoreboard { flex-direction: column; gap: 0.5rem; }
   .match-panel {
     top: 50%;

@@ -3,6 +3,8 @@ var __name = (target, value) => __defProp(target, "name", { value, configurable:
 
 // ../shared/multiplayer.js
 var LOBBY_IDS = ["solo", "main", "secondary"];
+var PLAYER_NAME_MAX_LENGTH = 18;
+var MAX_SKIN_DATA_URL_LENGTH = 12e4;
 var ARENA_RADIUS = 66;
 var MAX_PLAYERS_PER_LOBBY = 8;
 var MIN_PLAYERS_TO_START = 1;
@@ -11,9 +13,9 @@ var MAX_PACKET_TELEPORT_DISTANCE = 4;
 var PLAYER_MIN_Y = -2;
 var PLAYER_MAX_Y = 12;
 var COUNTDOWN_DURATION_MS = 1e4;
-var BUS_FLIGHT_DURATION_MS = 18e3;
-var BUS_DOORS_OPEN_OFFSET_MS = 5200;
-var BUS_AUTO_DROP_OFFSET_MS = 15400;
+var BUS_FLIGHT_DURATION_MS = 28e3;
+var BUS_DOORS_OPEN_OFFSET_MS = 2500;
+var BUS_AUTO_DROP_OFFSET_MS = 24e3;
 var MATCH_PHASES = Object.freeze({
   staging: "staging",
   countdown: "countdown",
@@ -141,6 +143,31 @@ function isValidMatchPhase(phase) {
   return Object.values(MATCH_PHASES).includes(phase);
 }
 __name(isValidMatchPhase, "isValidMatchPhase");
+function sanitizePlayerName(name, fallbackName = "") {
+  if (typeof name !== "string") {
+    return fallbackName;
+  }
+  const normalized = name.replace(/\s+/g, " ").trim().slice(0, PLAYER_NAME_MAX_LENGTH);
+  return normalized || fallbackName;
+}
+__name(sanitizePlayerName, "sanitizePlayerName");
+function sanitizeSkinDataUrl(skinDataUrl, fallbackSkinDataUrl = "") {
+  if (typeof skinDataUrl !== "string") {
+    return fallbackSkinDataUrl;
+  }
+  const trimmed = skinDataUrl.trim();
+  if (!trimmed) {
+    return fallbackSkinDataUrl;
+  }
+  if (!trimmed.startsWith("data:image/png;base64,")) {
+    return fallbackSkinDataUrl;
+  }
+  if (trimmed.length > MAX_SKIN_DATA_URL_LENGTH) {
+    return fallbackSkinDataUrl;
+  }
+  return trimmed;
+}
+__name(sanitizeSkinDataUrl, "sanitizeSkinDataUrl");
 function normalizeYaw(yaw) {
   if (!Number.isFinite(yaw)) {
     return PLAYER_SPAWN.yaw;
@@ -216,6 +243,7 @@ function serializePlayerSnapshot(player) {
     id: player.id,
     name: player.name,
     color: player.color,
+    skinDataUrl: player.skinDataUrl ?? "",
     guestIndex: player.guestIndex,
     pose: player.pose,
     actionState: player.actionState,
@@ -224,6 +252,11 @@ function serializePlayerSnapshot(player) {
   };
 }
 __name(serializePlayerSnapshot, "serializePlayerSnapshot");
+function applyProfile(player, profile = {}) {
+  player.name = sanitizePlayerName(profile.name, player.name);
+  player.skinDataUrl = sanitizeSkinDataUrl(profile.skinDataUrl, player.skinDataUrl ?? "");
+}
+__name(applyProfile, "applyProfile");
 function sanitizeVector3(value, fallback = { x: 0, y: 0, z: 0 }) {
   return {
     x: Number.isFinite(value?.x) ? value.x : fallback.x,
@@ -303,6 +336,7 @@ var LobbyRoom = class {
         id: attachment.playerId,
         name: attachment.name,
         color: attachment.color,
+        skinDataUrl: attachment.skinDataUrl ?? "",
         pose: attachment.pose ?? createSpawnPose(attachment.playerPhase),
         actionState: attachment.actionState ?? createActionState(),
         websocket,
@@ -344,6 +378,7 @@ var LobbyRoom = class {
         id: playerId,
         name: profile.name,
         color: profile.color,
+        skinDataUrl: "",
         pose: createSpawnPose(playerPhase),
         actionState: createActionState(),
         websocket: server,
@@ -381,7 +416,7 @@ var LobbyRoom = class {
       return;
     }
     if (payload.type === "hello") {
-      this.handleHello(player);
+      this.handleHello(player, payload.profile);
       return;
     }
     if (payload.type === "ping") {
@@ -399,6 +434,10 @@ var LobbyRoom = class {
     }
     if (payload.type === "player-state") {
       this.handlePlayerState(player, payload.playerPhase);
+      return;
+    }
+    if (payload.type === "profile") {
+      this.handleProfile(player, payload.profile);
       return;
     }
     if (payload.type === "pose") {
@@ -427,7 +466,8 @@ var LobbyRoom = class {
     } catch {
     }
   }
-  handleHello(player) {
+  handleHello(player, profile) {
+    applyProfile(player, profile);
     player.joined = true;
     player.playerPhase = this.getInitialPlayerPhase();
     if (!player.pose) {
@@ -447,6 +487,11 @@ var LobbyRoom = class {
         selfId: player.id,
         name: player.name,
         color: player.color,
+        skinDataUrl: player.skinDataUrl ?? "",
+        guestIndex: player.guestIndex,
+        ready: Boolean(player.ready),
+        playerPhase: player.playerPhase,
+        pose: player.pose,
         lobbyId: this.lobbyId,
         playerCount: this.getJoinedPlayerCount(),
         players: others,
@@ -463,6 +508,25 @@ var LobbyRoom = class {
       player.id
     );
     this.reconcileMatchState(true);
+  }
+  handleProfile(player, profile) {
+    if (!player.joined) {
+      return;
+    }
+    const previousName = player.name;
+    const previousSkinDataUrl = player.skinDataUrl ?? "";
+    applyProfile(player, profile);
+    if (player.name === previousName && (player.skinDataUrl ?? "") === previousSkinDataUrl) {
+      return;
+    }
+    this.updateAttachment(player);
+    this.broadcast({
+      type: "presence",
+      action: "update",
+      playerCount: this.getJoinedPlayerCount(),
+      player: serializePlayerSnapshot(player)
+    });
+    this.broadcastMatchState();
   }
   handleReady(player, ready) {
     if (!player.joined) {
@@ -753,6 +817,7 @@ var LobbyRoom = class {
       guestIndex: player.guestIndex,
       name: player.name,
       color: player.color,
+      skinDataUrl: player.skinDataUrl ?? "",
       pose: player.pose,
       actionState: player.actionState,
       joined: player.joined,

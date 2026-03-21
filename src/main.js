@@ -4,6 +4,12 @@ import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { MultiplayerClient } from "./multiplayer-client.js";
 import { createRemotePlayerAvatar, updateRemotePlayerAvatar } from "./remote-player.js";
 import {
+  createMinecraftAvatar,
+  getDefaultMinecraftSkinDataUrl,
+  setMinecraftAvatarName,
+  setMinecraftAvatarSkin,
+} from "./minecraft-avatar.js";
+import {
   ACTION_KINDS,
   ARENA_RADIUS,
   BUS_ROUTE,
@@ -19,6 +25,9 @@ import {
   createActionState,
   createMatchState,
   getSpawnForPhase,
+  sanitizePlayerName,
+  sanitizeSkinDataUrl,
+  PLAYER_NAME_MAX_LENGTH,
 } from "../shared/multiplayer.js";
 
 const canvas = document.querySelector("#scene");
@@ -30,6 +39,13 @@ const meterFillEl = document.querySelector("#meter-fill");
 const gameOverEl = document.querySelector("#game-over");
 const lobbyMenuEl = document.querySelector("#lobby-menu");
 const lobbyMenuStatusEl = document.querySelector("#lobby-menu-status");
+const profileToggleBtn = document.querySelector("#profile-toggle-btn");
+const profileEditorEl = document.querySelector("#profile-editor");
+const profileNameInputEl = document.querySelector("#profile-name-input");
+const profileSkinInputEl = document.querySelector("#profile-skin-input");
+const profileResetSkinBtn = document.querySelector("#profile-reset-skin-btn");
+const profileStatusEl = document.querySelector("#profile-status");
+const skinPreviewCanvas = document.querySelector("#skin-preview");
 const matchPanelEl = document.querySelector("#match-panel");
 const matchPanelTitleEl = document.querySelector("#match-panel-title");
 const matchPanelSubtitleEl = document.querySelector("#match-panel-subtitle");
@@ -96,6 +112,47 @@ const lobbyCountEls = {
   secondary: document.querySelector("#lobby-count-secondary"),
 };
 let pendingAutoReadyAfterJoin = false;
+const PLAYER_PROFILE_STORAGE_KEY = "s25-ultra-player-profile-v1";
+const DEFAULT_SKIN_DATA_URL = getDefaultMinecraftSkinDataUrl();
+
+function createDefaultPlayerProfile() {
+  return {
+    name: "",
+    skinDataUrl: DEFAULT_SKIN_DATA_URL,
+  };
+}
+
+function sanitizePlayerProfile(profile = {}) {
+  return {
+    name: sanitizePlayerName(profile.name, ""),
+    skinDataUrl: sanitizeSkinDataUrl(profile.skinDataUrl, DEFAULT_SKIN_DATA_URL),
+  };
+}
+
+function loadStoredPlayerProfile() {
+  const fallback = createDefaultPlayerProfile();
+
+  try {
+    const raw = window.localStorage.getItem(PLAYER_PROFILE_STORAGE_KEY);
+    if (!raw) {
+      return fallback;
+    }
+
+    return sanitizePlayerProfile(JSON.parse(raw));
+  } catch {
+    return fallback;
+  }
+}
+
+function saveStoredPlayerProfile(profile) {
+  try {
+    window.localStorage.setItem(PLAYER_PROFILE_STORAGE_KEY, JSON.stringify(profile));
+  } catch {
+    // Ignore storage write failures.
+  }
+}
+
+const playerProfile = loadStoredPlayerProfile();
 
 const renderer = new THREE.WebGLRenderer({
   canvas,
@@ -173,7 +230,6 @@ const tempVecQ = new THREE.Vector3();
 const cameraCenterRay = new THREE.Vector2(0, 0);
 const aimPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -0.2);
 const phoneAimCenter = new THREE.Vector3();
-const smokeSpawnOffset = new THREE.Vector3(0, 0, 0);
 const aimState = {
   point: new THREE.Vector3(),
   mode: "phone",
@@ -196,6 +252,9 @@ const phoneMetrics = {
   width: 3.1,
   length: 6.8,
   thickness: 0.32,
+};
+const standingTargetMetrics = {
+  swayBaseY: 1.88,
 };
 
 const poopConfig = {
@@ -222,7 +281,7 @@ const strikeConfig = {
   cooldown: 0.42,
   range: 3.4,
   assistRange: 11,
-  playerTurnSnap: 0.38,
+  playerTurnSnap: 0.26,
 };
 const standingTargetPosition = new THREE.Vector3(36.4, 0, -1.8);
 
@@ -308,14 +367,8 @@ const state = {
 const projectiles = [];
 const poopRopes = [];
 const splats = [];
-const smokePuffs = [];
 const dustPuffs = [];
 const impactBursts = [];
-const smokeConfig = {
-  spawnInterval: 0.11,
-  maxPuffs: 22,
-};
-let smokeSpawnTimer = 0;
 let activePoopRope = null;
 
 const projectileMainGeometry = new THREE.CapsuleGeometry(0.11, 0.16, 5, 10);
@@ -325,7 +378,6 @@ const projectileStringGeometry = new THREE.SphereGeometry(0.058, 10, 10);
 const splatBlobGeometry = new THREE.SphereGeometry(1, 18, 12);
 const splatDropletGeometry = new THREE.SphereGeometry(0.12, 10, 10);
 const splatFiberGeometry = new THREE.SphereGeometry(0.025, 7, 7);
-const smokeGeometry = new THREE.SphereGeometry(0.08, 8, 8);
 const impactRingGeometry = new THREE.RingGeometry(0.12, 0.28, 28);
 const impactSparkGeometry = new THREE.SphereGeometry(0.06, 8, 8);
 const poopTubeMaterial = createPoopMaterial(0x5c3014, {
@@ -365,10 +417,16 @@ const multiplayerState = {
   localActionState: createActionState(),
   matchState: createMatchState(),
   lobbyCounts: {
+    solo: 0,
     main: 0,
     secondary: 0,
   },
   lobbyStatus: {
+    solo: {
+      playerCount: 0,
+      readyCount: 0,
+      phase: MATCH_PHASES.staging,
+    },
     main: {
       playerCount: 0,
       readyCount: 0,
@@ -397,6 +455,10 @@ const multiplayer = new MultiplayerClient({
   onError: handleMultiplayerError,
 });
 
+multiplayer.setProfile(playerProfile);
+setMinecraftAvatarSkin(hero, playerProfile.skinDataUrl);
+setMinecraftAvatarName(hero, playerProfile.name || "Du");
+
 setupLights();
 setupWorld();
 resetRound(true);
@@ -418,6 +480,21 @@ joinButtons.forEach((button) => {
 });
 if (readyBtn) {
   readyBtn.addEventListener("click", onReadyButtonClick);
+}
+if (profileToggleBtn) {
+  profileToggleBtn.addEventListener("click", () => {
+    profileEditorEl?.classList.toggle("hidden");
+  });
+}
+if (profileNameInputEl) {
+  profileNameInputEl.maxLength = PLAYER_NAME_MAX_LENGTH;
+  profileNameInputEl.addEventListener("input", onProfileNameInput);
+}
+if (profileSkinInputEl) {
+  profileSkinInputEl.addEventListener("change", onProfileSkinInput);
+}
+if (profileResetSkinBtn) {
+  profileResetSkinBtn.addEventListener("click", onProfileResetSkin);
 }
 
 initializeMultiplayerUi();
@@ -660,6 +737,11 @@ function syncLocalRosterState() {
   }
 
   state.localReady = Boolean(localPlayer.ready);
+  multiplayerState.selfName = localPlayer.name ?? multiplayerState.selfName;
+  setMinecraftAvatarName(hero, multiplayerState.selfName || playerProfile.name || "Du");
+  if (localPlayer.skinDataUrl) {
+    setMinecraftAvatarSkin(hero, localPlayer.skinDataUrl);
+  }
 }
 
 function renderLobbyPlayerList() {
@@ -2780,220 +2862,10 @@ function createSeededRandom(seed) {
 }
 
 function buildHero() {
-  const root = new THREE.Group();
-  const torso = new THREE.Group();
-  const headPivot = new THREE.Group();
-  const leftArm = new THREE.Group();
-  const rightArm = new THREE.Group();
-  const leftLeg = new THREE.Group();
-  const rightLeg = new THREE.Group();
-  const buttAnchor = new THREE.Object3D();
-  const cigaretteTip = new THREE.Object3D();
-  const strikeAnchor = new THREE.Object3D();
-
-  const coatMaterial = new THREE.MeshStandardMaterial({
-    color: 0x5e6d59,
-    roughness: 0.96,
-  });
-  const legMaterial = new THREE.MeshStandardMaterial({
-    color: 0x595959,
-    roughness: 0.96,
-  });
-  const bootMaterial = new THREE.MeshStandardMaterial({
-    color: 0x2d2926,
-    roughness: 0.9,
-  });
-  const skinMaterial = new THREE.MeshStandardMaterial({
-    color: 0xd8a57f,
-    roughness: 0.9,
-  });
-  const hatMaterial = new THREE.MeshStandardMaterial({
-    color: 0x6c5947,
-    roughness: 0.96,
-  });
-
-  root.add(torso, leftLeg, rightLeg);
-  torso.add(headPivot, leftArm, rightArm, buttAnchor);
-
-  const coat = new THREE.Mesh(
-    new THREE.CapsuleGeometry(0.55, 1.28, 8, 16),
-    coatMaterial,
-  );
-  coat.position.y = 1.45;
-  coat.scale.z = 0.82;
-  coat.castShadow = true;
-  coat.receiveShadow = true;
-  torso.add(coat);
-
-  const belly = new THREE.Mesh(
-    new THREE.SphereGeometry(0.5, 18, 18),
-    new THREE.MeshStandardMaterial({
-      color: 0x728168,
-      roughness: 0.94,
-    }),
-  );
-  belly.position.set(0, 1.32, 0.08);
-  belly.scale.set(1.02, 0.9, 0.78);
-  belly.castShadow = true;
-  torso.add(belly);
-
-  const scarf = new THREE.Mesh(
-    new THREE.TorusGeometry(0.39, 0.08, 12, 32),
-    new THREE.MeshStandardMaterial({
-      color: 0xa36c55,
-      roughness: 0.9,
-    }),
-  );
-  scarf.rotation.x = Math.PI / 2;
-  scarf.position.y = 1.97;
-  scarf.castShadow = true;
-  torso.add(scarf);
-
-  const head = new THREE.Mesh(
-    new THREE.SphereGeometry(0.32, 20, 20),
-    skinMaterial,
-  );
-  head.position.y = 2.34;
-  head.castShadow = true;
-  headPivot.add(head);
-
-  const nose = new THREE.Mesh(
-    new THREE.ConeGeometry(0.08, 0.17, 10),
-    new THREE.MeshStandardMaterial({
-      color: 0xc88b63,
-      roughness: 0.88,
-    }),
-  );
-  nose.rotation.x = Math.PI / 2;
-  nose.position.set(0, 2.3, 0.28);
-  headPivot.add(nose);
-
-  const moustache = new THREE.Mesh(
-    new THREE.BoxGeometry(0.3, 0.05, 0.08),
-    new THREE.MeshStandardMaterial({
-      color: 0xe5e0d2,
-      roughness: 0.98,
-    }),
-  );
-  moustache.position.set(0, 2.22, 0.23);
-  moustache.castShadow = true;
-  headPivot.add(moustache);
-
-  const hat = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.36, 0.34, 0.22, 18),
-    hatMaterial,
-  );
-  hat.position.y = 2.63;
-  hat.castShadow = true;
-  headPivot.add(hat);
-
-  const earFlapLeft = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.27, 0.06), hatMaterial);
-  earFlapLeft.position.set(-0.35, 2.52, 0);
-  const earFlapRight = earFlapLeft.clone();
-  earFlapRight.position.x = 0.35;
-  headPivot.add(earFlapLeft, earFlapRight);
-
-  const shoulderLeft = new THREE.Mesh(
-    new THREE.SphereGeometry(0.18, 14, 14),
-    coatMaterial,
-  );
-  shoulderLeft.position.set(-0.55, 1.86, 0);
-  shoulderLeft.castShadow = true;
-  torso.add(shoulderLeft);
-
-  const shoulderRight = shoulderLeft.clone();
-  shoulderRight.position.x = 0.55;
-  torso.add(shoulderRight);
-
-  const armGeometry = new THREE.CapsuleGeometry(0.11, 0.7, 6, 12);
-  const leftForearm = new THREE.Mesh(armGeometry, coatMaterial);
-  leftForearm.position.set(0, -0.34, 0.03);
-  leftForearm.rotation.z = 0.12;
-  leftForearm.castShadow = true;
-  leftArm.position.set(-0.7, 1.72, 0.05);
-  leftArm.add(leftForearm);
-
-  const rightForearm = new THREE.Mesh(armGeometry, coatMaterial);
-  rightForearm.position.set(0, -0.34, 0.1);
-  rightForearm.rotation.z = -0.52;
-  rightForearm.rotation.x = 0.24;
-  rightForearm.castShadow = true;
-  rightArm.position.set(0.74, 1.76, 0.08);
-  rightArm.add(rightForearm);
-
-  const hand = new THREE.Mesh(
-    new THREE.SphereGeometry(0.1, 12, 12),
-    new THREE.MeshStandardMaterial({
-      color: 0xd39b72,
-      roughness: 0.86,
-    }),
-  );
-  hand.position.set(0.22, -0.7, 0.37);
-  hand.castShadow = true;
-  rightArm.add(hand);
-
-  const cigarette = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.022, 0.022, 0.36, 10),
-    new THREE.MeshStandardMaterial({
-      color: 0xf1ead9,
-      roughness: 0.82,
-      metalness: 0.02,
-    }),
-  );
-  cigarette.rotation.z = Math.PI / 2;
-  cigarette.position.set(0.36, -0.7, 0.36);
-  rightArm.add(cigarette);
-
-  const ember = new THREE.Mesh(
-    new THREE.SphereGeometry(0.03, 10, 10),
-    new THREE.MeshBasicMaterial({
-      color: 0xff7c35,
-    }),
-  );
-  ember.position.set(0.55, -0.7, 0.36);
-  rightArm.add(ember);
-  cigaretteTip.position.copy(ember.position);
-  rightArm.add(cigaretteTip);
-  strikeAnchor.position.set(0.3, -0.68, 0.33);
-  rightArm.add(strikeAnchor);
-
-  const leftUpperLeg = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.14, 0.16, 0.86, 12),
-    legMaterial,
-  );
-  leftUpperLeg.position.y = 0.58;
-  leftUpperLeg.castShadow = true;
-  leftLeg.position.set(-0.2, 0, 0.03);
-  leftLeg.add(leftUpperLeg);
-
-  const rightUpperLeg = leftUpperLeg.clone();
-  rightLeg.position.set(0.2, 0, 0.03);
-  rightLeg.add(rightUpperLeg);
-
-  const leftBoot = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.18, 0.72), bootMaterial);
-  leftBoot.position.set(0, 0.08, 0.08);
-  leftBoot.castShadow = true;
-  leftBoot.receiveShadow = true;
-  leftLeg.add(leftBoot);
-
-  const rightBoot = leftBoot.clone();
-  rightLeg.add(rightBoot);
-
-  buttAnchor.position.set(0, 1.06, -0.46);
-  root.scale.setScalar(heroMetrics.scale);
-
-  return {
-    root,
-    torso,
-    headPivot,
-    leftArm,
-    rightArm,
-    leftLeg,
-    rightLeg,
-    buttAnchor,
-    cigaretteTip,
-    strikeAnchor,
-  };
+  const avatar = createMinecraftAvatar();
+  avatar.root.scale.setScalar(heroMetrics.scale);
+  avatar.motionTime = Math.random() * Math.PI * 2;
+  return avatar;
 }
 
 function createPhone() {
@@ -3203,7 +3075,7 @@ function createStandingTarget() {
   const targetWidth = targetHeight * (425 / 1331);
 
   billboardPivot.position.y = 0.27;
-  swayPivot.position.y = 1.72;
+  swayPivot.position.y = standingTargetMetrics.swayBaseY;
   root.add(billboardPivot);
   billboardPivot.add(swayPivot);
   swayPivot.add(visualGroup);
@@ -3309,7 +3181,165 @@ function createStainMaterial(color, overrides = {}) {
   });
 }
 
+function setProfileStatus(text, isError = false) {
+  if (!profileStatusEl) {
+    return;
+  }
+
+  profileStatusEl.textContent = text;
+  profileStatusEl.classList.toggle("profile-editor__status--error", isError);
+}
+
+function drawSkinPreview(skinDataUrl) {
+  if (!skinPreviewCanvas) {
+    return;
+  }
+
+  const context = skinPreviewCanvas.getContext("2d");
+  const image = new Image();
+  image.addEventListener("load", () => {
+    context.imageSmoothingEnabled = false;
+    context.clearRect(0, 0, skinPreviewCanvas.width, skinPreviewCanvas.height);
+    context.drawImage(image, 8, 8, 8, 8, 0, 0, skinPreviewCanvas.width, skinPreviewCanvas.height);
+    context.drawImage(image, 40, 8, 8, 8, 0, 0, skinPreviewCanvas.width, skinPreviewCanvas.height);
+  });
+  image.src = skinDataUrl || DEFAULT_SKIN_DATA_URL;
+}
+
+function syncProfileUi() {
+  if (profileNameInputEl) {
+    profileNameInputEl.value = playerProfile.name;
+  }
+
+  drawSkinPreview(playerProfile.skinDataUrl);
+}
+
+function applyPlayerProfile(nextProfile, options = {}) {
+  const normalizedProfile = sanitizePlayerProfile(nextProfile);
+  playerProfile.name = normalizedProfile.name;
+  playerProfile.skinDataUrl = normalizedProfile.skinDataUrl;
+
+  saveStoredPlayerProfile(playerProfile);
+  syncProfileUi();
+  multiplayer.setProfile(playerProfile);
+  setMinecraftAvatarSkin(hero, playerProfile.skinDataUrl);
+  setMinecraftAvatarName(hero, playerProfile.name || multiplayerState.selfName || "Du");
+
+  const localPlayer = multiplayerState.playerRoster.get(multiplayerState.selfId);
+  if (localPlayer) {
+    upsertRosterPlayer({
+      ...localPlayer,
+      name: playerProfile.name || localPlayer.name,
+      skinDataUrl: playerProfile.skinDataUrl,
+    });
+  }
+
+  if (!options.silent) {
+    setProfileStatus(options.statusText || "Profilen sparades och synkas till lobbyn.");
+  }
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.addEventListener("load", () => resolve(String(reader.result ?? "")));
+    reader.addEventListener("error", () => reject(new Error("Filen kunde inte lasas.")));
+    reader.readAsDataURL(file);
+  });
+}
+
+function loadImageFromDataUrl(dataUrl) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.addEventListener("load", () => resolve(image));
+    image.addEventListener("error", () => reject(new Error("PNG-filen gick inte att lasa.")));
+    image.src = dataUrl;
+  });
+}
+
+async function normalizeUploadedMinecraftSkin(file) {
+  if (!file) {
+    throw new Error("Valj en PNG-fil for skinnen.");
+  }
+
+  const looksLikePng = file.type === "image/png" || file.name?.toLowerCase().endsWith(".png");
+  if (!looksLikePng) {
+    throw new Error("Bara Minecraft-skins i PNG-format fungerar.");
+  }
+
+  const dataUrl = await readFileAsDataUrl(file);
+  const image = await loadImageFromDataUrl(dataUrl);
+  if (image.naturalWidth !== 64 || image.naturalHeight !== 64) {
+    throw new Error("Just nu stods bara klassiska Minecraft-skins i 64x64 PNG.");
+  }
+
+  const canvas = document.createElement("canvas");
+  canvas.width = 64;
+  canvas.height = 64;
+  const context = canvas.getContext("2d");
+  context.imageSmoothingEnabled = false;
+  context.drawImage(image, 0, 0);
+  return canvas.toDataURL("image/png");
+}
+
+function onProfileNameInput(event) {
+  applyPlayerProfile(
+    {
+      ...playerProfile,
+      name: event.target.value,
+    },
+    {
+      silent: true,
+    },
+  );
+  setProfileStatus(
+    playerProfile.name
+      ? "Namnet sparas direkt och visas over spelaren online."
+      : "Tomt namn betyder att servern ger dig ett slumpnamn.",
+  );
+}
+
+async function onProfileSkinInput(event) {
+  const file = event.target.files?.[0];
+  if (!file) {
+    return;
+  }
+
+  setProfileStatus("Laddar in skinnen...");
+
+  try {
+    const skinDataUrl = await normalizeUploadedMinecraftSkin(file);
+    applyPlayerProfile(
+      {
+        ...playerProfile,
+        skinDataUrl,
+      },
+      {
+        statusText: "Minecraft-skinnet ar aktivt och synkas till andra spelare.",
+      },
+    );
+  } catch (error) {
+    setProfileStatus(error.message || "Skinnen gick inte att anvanda.", true);
+  } finally {
+    event.target.value = "";
+  }
+}
+
+function onProfileResetSkin() {
+  applyPlayerProfile(
+    {
+      ...playerProfile,
+      skinDataUrl: DEFAULT_SKIN_DATA_URL,
+    },
+    {
+      statusText: "Standard-skinnen ar tillbaka.",
+    },
+  );
+}
+
 function initializeMultiplayerUi() {
+  syncProfileUi();
+  setProfileStatus("Stodjer klassiska Minecraft-skins i 64x64 PNG.");
   setMenuOpen(true);
   updateLobbyCounts();
   syncNetworkCard();
@@ -3423,6 +3453,8 @@ function handleMultiplayerStateChange({ connectionState, lobbyId, reason }) {
     resetInputState();
     state.localReady = false;
     state.playerPhase = MATCH_PHASES.staging;
+    setMinecraftAvatarSkin(hero, playerProfile.skinDataUrl);
+    setMinecraftAvatarName(hero, playerProfile.name || "Du");
     syncNetworkCard();
     syncMatchPanel();
     renderLobbyPlayerList();
@@ -3445,6 +3477,18 @@ function handleLobbyWelcome(message) {
   multiplayerState.lobbyCounts[message.lobbyId] = message.playerCount ?? 1;
   clearRemotePlayers();
   resetRoundState();
+  upsertRosterPlayer({
+    id: message.selfId,
+    name: message.name,
+    color: message.color,
+    skinDataUrl: message.skinDataUrl ?? playerProfile.skinDataUrl,
+    guestIndex: message.guestIndex ?? 0,
+    pose: message.pose ?? createLocalPosePacket(),
+    ready: Boolean(message.ready),
+    playerPhase: message.playerPhase ?? state.playerPhase,
+  });
+  setMinecraftAvatarSkin(hero, message.skinDataUrl ?? playerProfile.skinDataUrl);
+  setMinecraftAvatarName(hero, message.name || playerProfile.name || "Du");
 
   for (const player of message.players ?? []) {
     upsertRosterPlayer(player);
@@ -3494,6 +3538,13 @@ function handleLobbyPresence(message) {
   }
 
   if (message.action === "join") {
+    upsertRosterPlayer(message.player);
+    queueRemotePose(message.player.id, message.player, message.player.pose);
+    syncMatchPanel();
+    return;
+  }
+
+  if (message.action === "update") {
     upsertRosterPlayer(message.player);
     queueRemotePose(message.player.id, message.player, message.player.pose);
     syncMatchPanel();
@@ -3834,11 +3885,16 @@ function removeRemotePlayer(playerId) {
 function ensureRemotePlayer(playerId, playerMeta = null) {
   let remotePlayer = multiplayerState.remotePlayers.get(playerId);
   if (remotePlayer) {
-    if (playerMeta?.name) {
+    if (playerMeta && "name" in playerMeta) {
       remotePlayer.name = playerMeta.name;
+      setMinecraftAvatarName(remotePlayer.avatar, remotePlayer.name);
     }
     if (playerMeta?.color) {
       remotePlayer.color = playerMeta.color;
+    }
+    if (playerMeta && "skinDataUrl" in playerMeta) {
+      remotePlayer.skinDataUrl = playerMeta.skinDataUrl || DEFAULT_SKIN_DATA_URL;
+      setMinecraftAvatarSkin(remotePlayer.avatar, remotePlayer.skinDataUrl);
     }
     if (playerMeta?.actionState) {
       remotePlayer.actionState = {
@@ -3855,12 +3911,16 @@ function ensureRemotePlayer(playerId, playerMeta = null) {
     return remotePlayer;
   }
 
-  const avatar = createRemotePlayerAvatar(playerMeta?.color ?? "#7d8da1");
+  const avatar = createRemotePlayerAvatar({
+    name: playerMeta?.name ?? "Gast",
+    skinDataUrl: playerMeta?.skinDataUrl ?? DEFAULT_SKIN_DATA_URL,
+  });
   remotePlayersRoot.add(avatar.root);
   remotePlayer = {
     id: playerId,
     name: playerMeta?.name ?? "Gast",
     color: playerMeta?.color ?? "#7d8da1",
+    skinDataUrl: playerMeta?.skinDataUrl ?? DEFAULT_SKIN_DATA_URL,
     avatar,
     actionState: {
       ...createActionState(),
@@ -4384,7 +4444,6 @@ function performStrike() {
   if (tempVecH.lengthSq() > 0.01) {
     const strikeYaw = Math.atan2(tempVecH.x, tempVecH.z);
     state.playerYaw = dampAngle(state.playerYaw, strikeYaw, strikeConfig.playerTurnSnap);
-    state.cameraYaw = dampAngle(state.cameraYaw, strikeYaw, strikeConfig.playerTurnSnap * 0.82);
   }
 
   state.cooldown = strikeConfig.cooldown;
@@ -4660,8 +4719,8 @@ function updatePlayer(delta) {
   hero.rightLeg.rotation.x = counterSwing * 0.55 - poopPose * 0.42;
   hero.leftArm.rotation.x = counterSwing * 0.48 - 0.08 + poopPose * 0.08 + strikePose * 0.34;
   hero.rightArm.rotation.x = walkSwing * 0.28 + 0.1 + poopPose * 0.14 - strikePose * 1.75;
-  hero.leftArm.rotation.z = 0.08 + poopPose * 0.03 - strikePose * 0.12;
-  hero.rightArm.rotation.z = -0.22 - poopPose * 0.08 + strikePose * 0.48;
+  hero.leftArm.rotation.z = 0.03 + poopPose * 0.02 - strikePose * 0.08;
+  hero.rightArm.rotation.z = -0.03 - poopPose * 0.02 + strikePose * 0.22;
   hero.torso.rotation.x = -state.moveAmount * 0.08 - jumpLean + poopPose * 0.2;
   hero.torso.rotation.y = -strikeTwist * 0.34;
   hero.torso.position.y =
@@ -4674,8 +4733,8 @@ function updatePlayer(delta) {
   if (state.playerPhase === MATCH_PHASES.bus) {
     hero.leftArm.rotation.x = -0.72;
     hero.rightArm.rotation.x = -0.72;
-    hero.leftArm.rotation.z = 0.14;
-    hero.rightArm.rotation.z = -0.14;
+    hero.leftArm.rotation.z = 0.06;
+    hero.rightArm.rotation.z = -0.06;
     hero.leftLeg.rotation.x = 0.34;
     hero.rightLeg.rotation.x = 0.34;
     hero.torso.rotation.x = -0.1;
@@ -4891,7 +4950,8 @@ function updateStandingTarget(delta) {
   const idleBob = Math.sin(targetState.floatTime * 1.85) * 0.05;
   const idleSway = Math.sin(targetState.floatTime * 1.3) * 0.04;
   const hitSway = targetState.wobble * 0.24;
-  standingTarget.swayPivot.position.y = 1.72 + idleBob - targetState.recoil * 0.28;
+  standingTarget.swayPivot.position.y =
+    standingTargetMetrics.swayBaseY + idleBob - targetState.recoil * 0.28;
   standingTarget.swayPivot.rotation.x = -targetState.recoil * 0.52;
   standingTarget.swayPivot.rotation.y = targetState.twist;
   standingTarget.swayPivot.rotation.z = idleSway + hitSway;
@@ -5658,54 +5718,6 @@ function updateHud() {
 function setMessage() {}
 
 function updateSmoke(delta) {
-  smokeSpawnTimer = Math.min(
-    smokeSpawnTimer + delta,
-    smokeConfig.spawnInterval * (smokeConfig.maxPuffs + 1),
-  );
-  while (smokeSpawnTimer >= smokeConfig.spawnInterval && smokePuffs.length < smokeConfig.maxPuffs) {
-    smokeSpawnTimer -= smokeConfig.spawnInterval;
-    const puff = new THREE.Mesh(
-      smokeGeometry,
-      new THREE.MeshBasicMaterial({
-        color: 0xffffff,
-        transparent: true,
-        opacity: 0.36,
-      }),
-    );
-    puff.position.copy(hero.cigaretteTip.getWorldPosition(tempVecJ)).add(smokeSpawnOffset);
-    puff.userData = {
-      velocity: tempVecK.set(
-        THREE.MathUtils.randFloat(-0.1, 0.12),
-        THREE.MathUtils.randFloat(0.24, 0.38),
-        THREE.MathUtils.randFloat(-0.08, 0.08),
-      ).clone(),
-      life: 0,
-      maxLife: THREE.MathUtils.randFloat(1.5, 2.3),
-    };
-    smokePuffs.push(puff);
-    scene.add(puff);
-  }
-
-  for (let index = smokePuffs.length - 1; index >= 0; index -= 1) {
-    const puff = smokePuffs[index];
-    puff.userData.life += delta;
-    puff.position.addScaledVector(puff.userData.velocity, delta);
-    puff.scale.multiplyScalar(1 + delta * 0.28);
-    puff.material.opacity = THREE.MathUtils.mapLinear(
-      puff.userData.life,
-      0,
-      puff.userData.maxLife,
-      0.45,
-      0,
-    );
-
-    if (puff.userData.life >= puff.userData.maxLife) {
-      scene.remove(puff);
-      puff.traverse(disposeObject);
-      smokePuffs.splice(index, 1);
-    }
-  }
-
   dustPuffs.forEach((particle) => {
     particle.position.addScaledVector(particle.userData.drift, delta);
     particle.position.y += Math.sin(clock.elapsedTime + particle.userData.phase) * delta * 0.07;
@@ -5766,8 +5778,12 @@ function disposeObject(object) {
   }
   if (object.material) {
     if (Array.isArray(object.material)) {
-      object.material.forEach((material) => material.dispose());
+      object.material.forEach((material) => {
+        material.map?.dispose?.();
+        material.dispose();
+      });
     } else {
+      object.material.map?.dispose?.();
       object.material.dispose();
     }
   }
@@ -5802,7 +5818,7 @@ function animate() {
   updateHud();
 
   const isMenuPhase = state.playerPhase === MATCH_PHASES.staging || state.playerPhase === MATCH_PHASES.countdown;
-  hero.root.visible = !isMenuPhase;
+  hero.root.visible = !isMenuPhase && state.playerPhase !== MATCH_PHASES.bus;
   remotePlayersRoot.visible = !isMenuPhase;
   document.body.classList.toggle("staging-lobby", isMenuPhase && multiplayerState.joined);
 
