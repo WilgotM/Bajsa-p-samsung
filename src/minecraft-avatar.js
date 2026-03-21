@@ -454,8 +454,8 @@ function buildClassicAvatarMeshes(baseMaterial, overlayMaterial) {
   leftLeg.add(leftLegOuter);
 
   buttAnchor.position.set(0, 13.4 * PIXEL, -2.3 * PIXEL);
-  strikeAnchor.position.set(0.14, -0.65, 0.2);
-  rightArm.add(strikeAnchor);
+  strikeAnchor.position.set(-0.14, -0.65, 0.2);
+  leftArm.add(strikeAnchor);
   nameTagAnchor.position.set(0, NAME_TAG_Y, 0);
 
   return {
@@ -567,11 +567,11 @@ export function updateMinecraftRemoteAvatar(avatar, pose, delta) {
   avatar.root.rotation.y = pose.yaw;
   avatar.leftLeg.rotation.x = swing * 0.62 - poopAmount * 0.28;
   avatar.rightLeg.rotation.x = counterSwing * 0.62 - poopAmount * 0.28;
-  avatar.leftArm.rotation.x = counterSwing * 0.62 - 0.08 + poopAmount * 0.08 + strikeAmount * 0.34;
-  avatar.rightArm.rotation.x = swing * 0.24 + 0.1 + poopAmount * 0.12 - strikeAmount * 1.7;
-  avatar.leftArm.rotation.z = 0.03 + poopAmount * 0.02 - strikeAmount * 0.08;
-  avatar.rightArm.rotation.z = -0.03 - poopAmount * 0.02 + strikeAmount * 0.22;
+  avatar.leftArm.rotation.x = counterSwing * 0.62 - 0.08 + poopAmount * 0.08 - strikeAmount * 1.7;
+  avatar.rightArm.rotation.x = swing * 0.24 + 0.1 + poopAmount * 0.12 + strikeAmount * 0.34;
+  avatar.leftArm.rotation.z = 0.03 + poopAmount * 0.02 + strikeAmount * 0.22;
+  avatar.rightArm.rotation.z = -0.03 - poopAmount * 0.02 - strikeAmount * 0.08;
   avatar.torso.rotation.x = -pose.moveAmount * 0.12 + poopAmount * 0.18;
-  avatar.torso.rotation.y = -strikeAmount * 0.24;
+  avatar.torso.rotation.y = strikeAmount * 0.24;
   avatar.headPivot.rotation.y = Math.sin(avatar.motionTime * 0.5) * 0.08;
 }

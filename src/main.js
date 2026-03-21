@@ -4879,16 +4879,16 @@ function updatePlayer(delta) {
 
   hero.leftLeg.rotation.x = walkSwing * 0.55 - poopPose * 0.42;
   hero.rightLeg.rotation.x = counterSwing * 0.55 - poopPose * 0.42;
-  hero.leftArm.rotation.x = counterSwing * 0.48 - 0.08 + poopPose * 0.08 + strikePose * 0.34;
-  hero.rightArm.rotation.x = walkSwing * 0.28 + 0.1 + poopPose * 0.14 - strikePose * 1.75;
-  hero.leftArm.rotation.z = 0.03 + poopPose * 0.02 - strikePose * 0.08;
-  hero.rightArm.rotation.z = -0.03 - poopPose * 0.02 + strikePose * 0.22;
+  hero.leftArm.rotation.x = counterSwing * 0.48 - 0.08 + poopPose * 0.08 - strikePose * 1.75;
+  hero.rightArm.rotation.x = walkSwing * 0.28 + 0.1 + poopPose * 0.14 + strikePose * 0.34;
+  hero.leftArm.rotation.z = 0.03 + poopPose * 0.02 + strikePose * 0.22;
+  hero.rightArm.rotation.z = -0.03 - poopPose * 0.02 - strikePose * 0.08;
   hero.torso.rotation.x = -state.moveAmount * 0.08 - jumpLean + poopPose * 0.2;
-  hero.torso.rotation.y = -strikeTwist * 0.34;
+  hero.torso.rotation.y = strikeTwist * 0.34;
   hero.torso.position.y =
     Math.abs(Math.sin(state.walkCycle * 2)) * state.moveAmount * 0.08 -
     poopPose * 0.08;
-  hero.headPivot.rotation.y = Math.sin(clock.elapsedTime * 0.8) * 0.1 + strikeTwist * 0.18;
+  hero.headPivot.rotation.y = Math.sin(clock.elapsedTime * 0.8) * 0.1 - strikeTwist * 0.18;
   hero.headPivot.rotation.x = -0.05 + Math.cos(clock.elapsedTime * 1.4) * 0.02 - poopPose * 0.04;
 
   if (state.playerPhase === MATCH_PHASES.bus) {
