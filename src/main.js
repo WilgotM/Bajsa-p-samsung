@@ -1633,7 +1633,7 @@ function addBiomePatch({
   position,
   radius,
   color,
-  y = 0.01,
+  y = 0,
   layer = GROUND_LAYERS.biomeBase,
   opacity = 1,
   scaleX = 1,
@@ -1663,7 +1663,6 @@ function addBiomePatch({
 function configureGroundSurface(mesh, { layer, transparent = mesh.material.transparent } = {}) {
   const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
   mesh.renderOrder = 10 + layer;
-  mesh.position.y += layer * 0.0025;
   materials.forEach((material) => {
     material.polygonOffset = true;
     material.polygonOffsetFactor = -1 - layer * 2;

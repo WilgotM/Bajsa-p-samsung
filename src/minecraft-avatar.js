@@ -188,6 +188,7 @@ function createNameTagSprite(text = "") {
   });
   const sprite = new THREE.Sprite(material);
   sprite.scale.set(NAME_TAG_WIDTH, NAME_TAG_HEIGHT, 1);
+  sprite.renderOrder = 1000;
 
   return {
     sprite,

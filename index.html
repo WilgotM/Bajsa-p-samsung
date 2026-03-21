@@ -33,48 +33,12 @@
           <h2>VÄLJ LOBBY</h2>
           <p id="lobby-menu-status" class="lobby-menu__status">Hämtar lobby-status...</p>
 
-          <button id="profile-toggle-btn" class="fn-button fn-secondary fn-profile-toggle" type="button">
-            <span class="btn-text">SKIN + NAMN</span>
-            <span class="btn-meta">Byt namn och ladda upp Minecraft-skin</span>
-          </button>
-
-          <div id="profile-editor" class="profile-editor hidden">
-            <div class="profile-editor__preview">
-              <canvas id="skin-preview" class="profile-editor__skin-preview" width="96" height="96"></canvas>
-              <div class="profile-editor__copy">
-                <h3>DIN GUBBE</h3>
-                <p>Stodjer klassiska Minecraft-skins i PNG-format. Just nu bara 64x64.</p>
-              </div>
-            </div>
-
-            <label class="profile-editor__field">
-              <span>Namn</span>
-              <input
-                id="profile-name-input"
-                class="profile-editor__input"
-                type="text"
-                maxlength="18"
-                placeholder="Tomt = slumpnamn fran servern"
-                autocomplete="nickname"
-              />
-            </label>
-
-            <div class="profile-editor__actions">
-              <label class="fn-button fn-primary profile-editor__upload" for="profile-skin-input">
-                <span class="btn-text">LADDA UPP PNG</span>
-                <span class="btn-meta">Valj en Minecraft-skin fran datorn</span>
-              </label>
-              <input id="profile-skin-input" type="file" accept="image/png" hidden />
-              <button id="profile-reset-skin-btn" class="fn-button fn-danger profile-editor__reset" type="button">
-                <span class="btn-text">ATERSTALL</span>
-                <span class="btn-meta">Tillbaka till standardskin</span>
-              </button>
-            </div>
-
-            <p id="profile-status" class="profile-editor__status">Stodjer klassiska Minecraft-skins i 64x64 PNG.</p>
-          </div>
-
           <div class="fn-lobby-grid">
+            <button id="profile-toggle-btn" class="fn-button fn-secondary fn-profile-toggle" type="button">
+              <span class="btn-text">SKIN + NAMN</span>
+              <span class="btn-meta">Byt namn och ladda upp Minecraft-skin</span>
+            </button>
+
             <button
               id="join-solo"
               class="fn-button fn-solo"
@@ -95,6 +59,57 @@
               <span class="btn-text">SEKUNDÄR LOBBY</span>
               <span id="lobby-count-secondary" class="btn-meta">0 / 8 spelare</span>
             </button>
+          </div>
+        </div>
+      </section>
+
+      <section id="profile-modal" class="fn-profile-modal hidden">
+        <div class="fn-profile-modal-content">
+          <button id="profile-close-btn" class="fn-close-btn" type="button" aria-label="Stäng"></button>
+          
+          <div class="fn-modal-header">
+            <h1 class="fn-title fn-modal-title">SPELARPROFIL</h1>
+            <p class="fn-modal-subtitle">Gör dig redo för striden.</p>
+          </div>
+
+          <div class="fn-modal-body">
+            <div class="fn-profile-hero">
+              <div class="fn-skin-wrapper">
+                <canvas id="skin-preview" class="fn-skin-canvas" width="160" height="160"></canvas>
+              </div>
+              <div class="fn-profile-info">
+                <h3>DIN GUBBE</h3>
+                <p>Support för klassiska Minecraft-skins i <strong class="fn-highlight">PNG-format</strong> (64x64).</p>
+              </div>
+            </div>
+
+            <div class="fn-profile-form">
+              <label class="fn-input-group">
+                <span class="fn-input-label">NAMN</span>
+                <input
+                  id="profile-name-input"
+                  class="fn-input"
+                  type="text"
+                  maxlength="18"
+                  placeholder="Tomt = slumpnamn"
+                  autocomplete="nickname"
+                />
+              </label>
+
+              <div class="fn-profile-actions">
+                <label class="fn-button fn-primary fn-upload-btn" for="profile-skin-input">
+                  <span class="btn-text">LADDA UPP SKIN</span>
+                  <span class="btn-meta">Fil från dator (.png)</span>
+                </label>
+                <input id="profile-skin-input" type="file" accept="image/png" hidden />
+                <button id="profile-reset-skin-btn" class="fn-button fn-danger fn-reset-btn" type="button">
+                  <span class="btn-text">ÅTERSTÄLL</span>
+                  <span class="btn-meta">Standardskin</span>
+                </button>
+              </div>
+
+              <p id="profile-status" class="fn-status-text">Stödjer klassiska Minecraft-skins i 64x64 PNG.</p>
+            </div>
           </div>
         </div>
       </section>
