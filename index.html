@@ -2,108 +2,77 @@
 <html lang="sv">
   <head>
     <meta charset="UTF-8" />
-    <meta
-      name="viewport"
-      content="width=device-width, initial-scale=1.0"
-    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Bajsa på Samsung S25 Ultra</title>
-    <meta
-      name="description"
-      content="Ett bisarrt litet 3D-webbspel om en rostig gammal kedjerokare som terroriserar en Samsung Galaxy S25 Ultra."
-    />
+    <meta name="description" content="Ett bisarrt litet 3D-webbspel om en rostig gammal kedjerokare som terroriserar en Samsung Galaxy S25 Ultra." />
+    
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Luckiest+Guy&family=Outfit:wght@400;700;900&display=swap" rel="stylesheet">
+    
     <script type="module" src="/src/main.js"></script>
   </head>
   <body>
+    <div id="loading-screen" class="loading-screen">
+      <div class="loading-content">
+        <div class="spinner"></div>
+        <h1>LADDAR...</h1>
+      </div>
+    </div>
+
     <div id="app">
       <canvas id="scene"></canvas>
 
-      <section id="lobby-menu" class="lobby-menu" aria-live="polite">
-        <div class="lobby-menu__panel">
-          <p class="eyebrow">Cloudflare multiplayer</p>
-          <h2>Valj en fast lobby</h2>
-          <p class="lobby-menu__copy">
-            Spelet har tva alltid oppna lobbys. Valj en, anslut och klicka
-            sedan i scenen for att lasa musen.
-          </p>
-          <p id="lobby-menu-status" class="lobby-menu__status">
-            Hamtar lobby-status...
-          </p>
+      <section id="lobby-menu" class="lobby-menu fn-menu" aria-live="polite">
+        <div class="fn-title-container">
+          <h1 class="fn-title">BAJSA PÅ S25 ULTRA</h1>
+          <p class="fn-subtitle">Klicka på gubben i bakgrunden för att smiska honom!</p>
+        </div>
 
-          <div class="lobby-grid">
-            <button
-              id="join-main"
-              class="lobby-button"
-              type="button"
-              data-lobby-id="main"
-            >
-              <span class="lobby-button__label">Huvudlobby</span>
-              <span id="lobby-count-main" class="lobby-button__meta">0 / 8 spelare</span>
+        <div class="fn-panel">
+          <h2>VÄLJ LOBBY</h2>
+          <p id="lobby-menu-status" class="lobby-menu__status">Hämtar lobby-status...</p>
+
+          <div class="fn-lobby-grid">
+            <button id="join-main" class="fn-button fn-primary" type="button" data-lobby-id="main">
+              <span class="btn-text">HUVUDLOBBY</span>
+              <span id="lobby-count-main" class="btn-meta">0 / 8 spelare</span>
             </button>
 
-            <button
-              id="join-secondary"
-              class="lobby-button"
-              type="button"
-              data-lobby-id="secondary"
-            >
-              <span class="lobby-button__label">Sekundar lobby</span>
-              <span id="lobby-count-secondary" class="lobby-button__meta">0 / 8 spelare</span>
+            <button id="join-secondary" class="fn-button fn-secondary" type="button" data-lobby-id="secondary">
+              <span class="btn-text">SEKUNDÄR LOBBY</span>
+              <span id="lobby-count-secondary" class="btn-meta">0 / 8 spelare</span>
             </button>
           </div>
-
-          <p class="lobby-menu__hint">
-            V1 synkar bara rorelse mellan spelare. Target, poang och skitfysik
-            ar fortfarande lokala.
-          </p>
         </div>
       </section>
 
       <section class="hud hud-top">
-        <div class="brand-block">
-          <p class="eyebrow">Sunkig simulator</p>
-          <h1>Bajsa på Samsung S25 Ultra</h1>
-          <p class="subtitle">
-            Den gamla mittbanan är fortfarande en farlig hot zone, men gubben
-            som lugnar trycket har skickats ut i öknen så att du måste lämna
-            riskområdet och jaga upp honom där ute.
-          </p>
-        </div>
-
-        <div class="scoreboard">
-          <div class="stat">
-            <span class="label">Träffar</span>
+        <div class="fn-scoreboard">
+          <div class="fn-stat">
+            <span class="label">TRÄFFAR</span>
             <strong id="hits">0</strong>
           </div>
-          <div class="stat">
-            <span class="label">Kombo</span>
+          <div class="fn-stat">
+            <span class="label">KOMBO</span>
             <strong id="combo">x0</strong>
           </div>
-          <div class="stat">
-            <span class="label">Skitpoäng</span>
+          <div class="fn-stat">
+            <span class="label">POÄNG</span>
             <strong id="score">0</strong>
           </div>
         </div>
       </section>
 
       <section class="hud hud-bottom">
-        <div class="meter-card">
+        <div class="fn-meter-card">
           <div class="meter-copy">
-            <span class="label">Hemorrojdrisk</span>
+            <span class="label">HEMORROJDRISK</span>
             <strong id="meter-text">0%</strong>
           </div>
           <div class="meter-track">
             <div id="meter-fill" class="meter-fill"></div>
           </div>
-        </div>
-
-        <div class="message-card">
-          <p id="message" class="message">WASD går runt, musen vrider kameran, Space hoppar.</p>
-          <p class="controls">
-            `WASD` rör sig. Musen vrider kameran. `Space` hoppar. Hall inne
-            vanster musknapp nar du star pa telefonen for att pressa ut en
-            lang bajskorv. Slapp eller kliv av telefonen for att stoppa. `F`
-            svingar fortfarande ett slag mot gubben ute i oknen.
-          </p>
         </div>
       </section>
 
@@ -116,9 +85,18 @@
       </section>
 
       <section id="game-over" class="game-over hidden" aria-live="polite">
-        <p class="eyebrow">Game Over</p>
-        <h2>Telefonen vann över rumpan</h2>
-        <p>Ny runda laddas in automatiskt.</p>
+        <h2>ELIMINERAD</h2>
+        <p>Startar om...</p>
+      </section>
+
+      <section id="pause-menu" class="pause-menu hidden">
+        <div class="pause-content">
+          <h1 class="fn-title pause-title">PAUSAD</h1>
+          <div class="pause-buttons">
+            <button id="resume-btn" class="fn-button fn-primary">FORTSÄTT</button>
+            <button id="quit-btn" class="fn-button fn-danger">LÄMNA MATCH</button>
+          </div>
+        </div>
       </section>
     </div>
   </body>

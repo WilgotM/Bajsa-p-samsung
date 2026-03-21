@@ -24,6 +24,42 @@ const meterFillEl = document.querySelector("#meter-fill");
 const gameOverEl = document.querySelector("#game-over");
 const lobbyMenuEl = document.querySelector("#lobby-menu");
 const lobbyMenuStatusEl = document.querySelector("#lobby-menu-status");
+
+const pauseMenuEl = document.querySelector("#pause-menu");
+const resumeBtn = document.querySelector("#resume-btn");
+const quitBtn = document.querySelector("#quit-btn");
+
+let isPaused = false;
+
+if (resumeBtn) {
+  resumeBtn.addEventListener("click", () => {
+    isPaused = false;
+    pauseMenuEl.classList.add("hidden");
+    canvas.requestPointerLock();
+  });
+}
+
+if (quitBtn) {
+  quitBtn.addEventListener("click", () => {
+    isPaused = false;
+    pauseMenuEl.classList.add("hidden");
+    multiplayerState.menuOpen = true;
+    lobbyMenuEl.classList.remove("hidden");
+    multiplayer.disconnect(true);
+    if (document.pointerLockElement) {
+      document.exitPointerLock();
+    }
+  });
+}
+
+const loadingScreen = document.querySelector("#loading-screen");
+setTimeout(() => {
+  if (loadingScreen) {
+    loadingScreen.style.opacity = '0';
+    setTimeout(() => loadingScreen.remove(), 500);
+  }
+}, 800);
+
 const networkCardEl = document.querySelector("#network-card");
 const networkLobbyNameEl = document.querySelector("#network-lobby-name");
 const networkStatusTextEl = document.querySelector("#network-status-text");
@@ -3361,8 +3397,25 @@ function onPointerDown(event) {
     return;
   }
 
+  if (multiplayerState.menuOpen) {
+    const mouse = new THREE.Vector2();
+    mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+    mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+    raycaster.setFromCamera(mouse, camera);
+    const intersects = raycaster.intersectObject(standingTarget.root, true);
+    if (intersects.length > 0) {
+      applyTargetHitVisuals(intersects[0].point, new THREE.Vector3(0, 5, -12));
+      standingTarget.state.hitFlash = 3; // Huge squash/stretch flash
+      standingTarget.state.wobbleVelocity += 12; // Extra wobble
+      standingTarget.state.menuSpin = (standingTarget.state.menuSpin || 0) + Math.PI * 2; // Cartwheel!
+    }
+    return;
+  }
+
+  if (isPaused) return;
+
   if (!multiplayerState.joined) {
-    setMessage("Valj en lobby i menyn innan du gar in i spelet.");
+    setMessage("Välj en lobby i menyn innan du går in i spelet.");
     return;
   }
 
@@ -3383,7 +3436,7 @@ function onPointerDown(event) {
 }
 
 function onPointerMove(event) {
-  if (!multiplayerState.joined || !isPointerLocked()) {
+  if (!multiplayerState.joined || !isPointerLocked() || isPaused) {
     return;
   }
 
@@ -3432,15 +3485,22 @@ function onVisibilityChange() {
 }
 
 function onPointerLockChange() {
-  document.body.classList.toggle("pointer-locked", isPointerLocked());
+  const locked = document.pointerLockElement === canvas;
+  document.body.classList.toggle("pointer-locked", locked);
 
-  if (isPointerLocked()) {
-    setMessage("Musen ar last. Vrid runt med musen, och hall vanster mus nere pa telefonen for att borja.");
+  if (locked) {
+    isPaused = false;
+    if (pauseMenuEl) pauseMenuEl.classList.add("hidden");
+    setMessage("Musen är låst. Vrid runt och klicka!");
     return;
   }
 
   stopPoopHold();
-  if (multiplayerState.joined) {
+  
+  if (multiplayerState.joined && !multiplayerState.menuOpen && !state.gameOver) {
+    isPaused = true;
+    if (pauseMenuEl) pauseMenuEl.classList.remove("hidden");
+  } else if (!isPaused) {
     setMessage("Klicka i scenen för att låsa musen igen.");
   }
 }
@@ -3807,6 +3867,16 @@ function resolveWorldCollisions(position) {
 }
 
 function updateCamera(delta) {
+  if (multiplayerState.menuOpen) {
+    const targetPos = standingTarget.root.position;
+    // Camera approaches target from map center direction — cacti end up behind him
+    const menuCamPos = tempVecA.set(targetPos.x - 14, 2.6, targetPos.z + 2);
+    const menuLookAt = tempVecB.set(targetPos.x, 1.4, targetPos.z);
+    camera.position.lerp(menuCamPos, 1 - Math.exp(-delta * 5));
+    camera.lookAt(menuLookAt);
+    return;
+  }
+
   const flatForward = tempVecI.set(
     Math.sin(state.cameraYaw),
     0,
@@ -3872,6 +3942,12 @@ function updateStandingTarget(delta) {
     1 - targetState.hitFlash * 0.05,
     scalePunch,
   );
+
+  if (targetState.menuSpin > 0) {
+    const spinAmount = Math.min(targetState.menuSpin, delta * 12);
+    targetState.menuSpin -= spinAmount;
+    standingTarget.visualGroup.rotation.z += spinAmount;
+  }
   standingTarget.glow.material.opacity = 0.16 + targetState.hitFlash * 0.34;
   standingTarget.beacon.material.opacity =
     0.14 + Math.sin(clock.elapsedTime * 4.5) * 0.04 + targetState.hitFlash * 0.18;
@@ -4609,7 +4685,9 @@ function updateHud() {
 
 function setMessage(text) {
   state.message = text;
-  messageEl.textContent = text;
+  if (messageEl) {
+    messageEl.textContent = text;
+  }
 }
 
 function updateSmoke(delta) {
