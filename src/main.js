@@ -1,5 +1,18 @@
 import "./style.css";
-import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js";
+import * as THREE from "three";
+import { MultiplayerClient } from "./multiplayer-client.js";
+import { createRemotePlayerAvatar, updateRemotePlayerAvatar } from "./remote-player.js";
+import {
+  ACTION_KINDS,
+  ARENA_RADIUS,
+  LOBBY_IDS,
+  LOBBY_LABELS,
+  MAX_PLAYERS_PER_LOBBY,
+  PLAYER_SPAWN,
+  REMOTE_INTERPOLATION_BACKTIME_MS,
+  WORLD_EVENT_KINDS,
+  createActionState,
+} from "../shared/multiplayer.js";
 
 const canvas = document.querySelector("#scene");
 const messageEl = document.querySelector("#message");
@@ -9,13 +22,23 @@ const scoreEl = document.querySelector("#score");
 const meterTextEl = document.querySelector("#meter-text");
 const meterFillEl = document.querySelector("#meter-fill");
 const gameOverEl = document.querySelector("#game-over");
+const lobbyMenuEl = document.querySelector("#lobby-menu");
+const lobbyMenuStatusEl = document.querySelector("#lobby-menu-status");
+const networkCardEl = document.querySelector("#network-card");
+const networkLobbyNameEl = document.querySelector("#network-lobby-name");
+const networkStatusTextEl = document.querySelector("#network-status-text");
+const joinButtons = Array.from(document.querySelectorAll(".lobby-button"));
+const lobbyCountEls = {
+  main: document.querySelector("#lobby-count-main"),
+  secondary: document.querySelector("#lobby-count-secondary"),
+};
 
 const renderer = new THREE.WebGLRenderer({
   canvas,
   antialias: true,
   alpha: true,
 });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.25));
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -77,6 +100,7 @@ const tempVecM = new THREE.Vector3();
 const tempVecN = new THREE.Vector3();
 const tempVecO = new THREE.Vector3();
 const tempVecP = new THREE.Vector3();
+const tempVecQ = new THREE.Vector3();
 const cameraCenterRay = new THREE.Vector2(0, 0);
 const aimPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -0.2);
 const phoneAimCenter = new THREE.Vector3();
@@ -134,7 +158,7 @@ const strikeConfig = {
 const standingTargetPosition = new THREE.Vector3(36.4, 0, -1.8);
 
 const world = {
-  arenaRadius: 66,
+  arenaRadius: ARENA_RADIUS,
   centralHubRadius: 17,
   legacyMapHalfSize: 26,
   biomeRadius: 15,
@@ -169,9 +193,9 @@ const heroMetrics = {
 };
 
 const state = {
-  playerPosition: new THREE.Vector3(0, 0, 17.8),
-  playerYaw: Math.PI,
-  cameraYaw: Math.PI,
+  playerPosition: new THREE.Vector3(PLAYER_SPAWN.x, PLAYER_SPAWN.y, PLAYER_SPAWN.z),
+  playerYaw: PLAYER_SPAWN.yaw,
+  cameraYaw: PLAYER_SPAWN.yaw,
   cameraPitch: -0.2,
   moveAmount: 0,
   walkCycle: 0,
@@ -231,12 +255,38 @@ const aimMarker = createAimMarker();
 const dangerRing = createDangerRing();
 const standingTarget = createStandingTarget();
 const hero = buildHero();
+const remotePlayersRoot = new THREE.Group();
 
 scene.add(phoneRig);
 scene.add(aimMarker);
 scene.add(dangerRing);
 scene.add(standingTarget.root);
 scene.add(hero.root);
+scene.add(remotePlayersRoot);
+
+const multiplayerState = {
+  selfId: null,
+  lobbyId: null,
+  joined: false,
+  localActionState: createActionState(),
+  lobbyCounts: {
+    main: 0,
+    secondary: 0,
+  },
+  remotePlayers: new Map(),
+  menuOpen: true,
+};
+
+const multiplayer = new MultiplayerClient({
+  onLobbySnapshot: handleLobbySnapshot,
+  onStateChange: handleMultiplayerStateChange,
+  onWelcome: handleLobbyWelcome,
+  onPresence: handleLobbyPresence,
+  onPose: handleLobbyPose,
+  onAction: handleLobbyAction,
+  onWorldEvent: handleLobbyWorldEvent,
+  onError: handleMultiplayerError,
+});
 
 setupLights();
 setupWorld();
@@ -254,7 +304,11 @@ document.addEventListener("visibilitychange", onVisibilityChange);
 canvas.addEventListener("pointerdown", onPointerDown);
 canvas.addEventListener("pointermove", onPointerMove);
 canvas.addEventListener("pointerleave", onPointerLeave);
+joinButtons.forEach((button) => {
+  button.addEventListener("click", onLobbyButtonClick);
+});
 
+initializeMultiplayerUi();
 animate();
 
 function setupLights() {
@@ -2629,18 +2683,6 @@ function createStandingTarget() {
   beacon.position.set(0, 2.2, 0);
   root.add(beacon);
 
-  const beaconRing = new THREE.Mesh(
-    new THREE.TorusGeometry(0.68, 0.08, 12, 32),
-    new THREE.MeshBasicMaterial({
-      color: 0xfff1bb,
-      transparent: true,
-      opacity: 0.92,
-      depthWrite: false,
-    }),
-  );
-  beaconRing.position.set(0, 4.15, 0);
-  root.add(beaconRing);
-
   const planeMaterial = new THREE.MeshStandardMaterial({
     map: texture,
     transparent: true,
@@ -2680,7 +2722,6 @@ function createStandingTarget() {
     hitMesh,
     glow,
     beacon,
-    beaconRing,
     planeMaterial,
     baseShadow,
     state: {
@@ -2718,16 +2759,500 @@ function createStainMaterial(color, overrides = {}) {
   });
 }
 
+function initializeMultiplayerUi() {
+  setMenuOpen(true);
+  updateLobbyCounts();
+  syncNetworkCard();
+  refreshLobbySnapshot();
+  window.setInterval(() => {
+    refreshLobbySnapshot(true);
+  }, 4000);
+}
+
+async function onLobbyButtonClick(event) {
+  const lobbyId = event.currentTarget.dataset.lobbyId;
+  if (!LOBBY_IDS.includes(lobbyId)) {
+    return;
+  }
+
+  setLobbyButtonsDisabled(true);
+  updateLobbyMenuStatus(`Ansluter till ${LOBBY_LABELS[lobbyId]}...`);
+
+  try {
+    await multiplayer.connect(lobbyId);
+  } catch (error) {
+    setLobbyButtonsDisabled(false);
+    updateLobbyMenuStatus("Det gick inte att ansluta till lobbyn just nu.");
+    setMessage("Multiplayer-servern svarade inte. Kolla Worker-URL och försök igen.");
+  }
+}
+
+function setLobbyButtonsDisabled(disabled) {
+  joinButtons.forEach((button) => {
+    button.disabled = disabled;
+  });
+}
+
+async function refreshLobbySnapshot(silent = false) {
+  try {
+    await multiplayer.fetchLobbies();
+  } catch (error) {
+    if (!silent || multiplayerState.menuOpen) {
+      updateLobbyMenuStatus("Lobby-status kunde inte hamtas. Kontrollera Worker-URL:en.");
+    }
+  }
+}
+
+function handleLobbySnapshot(payload) {
+  for (const lobby of payload.lobbies ?? []) {
+    if (!LOBBY_IDS.includes(lobby.lobbyId)) {
+      continue;
+    }
+    multiplayerState.lobbyCounts[lobby.lobbyId] = lobby.playerCount ?? 0;
+  }
+
+  updateLobbyCounts();
+  syncNetworkCard();
+
+  if (multiplayerState.menuOpen) {
+    updateLobbyMenuStatus("Valj en lobby och klicka sedan i scenen for att lasa musen.");
+  }
+}
+
+function handleMultiplayerStateChange({ connectionState, lobbyId, reason }) {
+  if (connectionState === "connecting") {
+    setLobbyButtonsDisabled(true);
+    updateLobbyMenuStatus(`Ansluter till ${LOBBY_LABELS[lobbyId]}...`);
+    return;
+  }
+
+  if (connectionState === "connected") {
+    updateLobbyMenuStatus("WebSocket uppe. Vantar pa welcome-paket...");
+    return;
+  }
+
+  if (connectionState === "disconnected") {
+    multiplayerState.joined = false;
+    multiplayerState.selfId = null;
+    multiplayerState.lobbyId = null;
+    multiplayerState.localActionState = createActionState();
+    clearRemotePlayers();
+    resetInputState();
+    syncNetworkCard();
+    setMenuOpen(true);
+    setLobbyButtonsDisabled(false);
+    if (document.pointerLockElement === canvas) {
+      document.exitPointerLock();
+    }
+    updateLobbyMenuStatus(reason || "Anslutningen tappades. Valj en lobby igen.");
+  }
+}
+
+function handleLobbyWelcome(message) {
+  multiplayerState.joined = true;
+  multiplayerState.selfId = message.selfId;
+  multiplayerState.lobbyId = message.lobbyId;
+  multiplayerState.localActionState = createActionState();
+  multiplayerState.lobbyCounts[message.lobbyId] = message.playerCount ?? 1;
+  clearRemotePlayers();
+
+  for (const player of message.players ?? []) {
+    queueRemotePose(player.id, player, player.pose);
+  }
+
+  setMenuOpen(false);
+  setLobbyButtonsDisabled(false);
+  networkCardEl.classList.remove("hidden");
+  resetRound(true);
+  syncNetworkCard();
+  setMessage(
+    `Du ar i ${LOBBY_LABELS[message.lobbyId]}. Klicka i scenen for att lasa musen och spring runt med de andra.`,
+  );
+}
+
+function handleLobbyPresence(message) {
+  const lobbyId = multiplayerState.lobbyId;
+  if (lobbyId) {
+    multiplayerState.lobbyCounts[lobbyId] = message.playerCount ?? multiplayerState.lobbyCounts[lobbyId];
+    updateLobbyCounts();
+    syncNetworkCard();
+  }
+
+  if (!message.player || message.player.id === multiplayerState.selfId) {
+    return;
+  }
+
+  if (message.action === "join") {
+    queueRemotePose(message.player.id, message.player, message.player.pose);
+    return;
+  }
+
+  if (message.action === "leave") {
+    removeRemotePlayer(message.player.id);
+  }
+}
+
+function handleLobbyPose(message) {
+  if (message.playerId === multiplayerState.selfId) {
+    return;
+  }
+
+  queueRemotePose(message.playerId, null, message.pose);
+}
+
+function handleLobbyAction(message) {
+  if (message.playerId === multiplayerState.selfId) {
+    return;
+  }
+
+  const remotePlayer = ensureRemotePlayer(message.playerId);
+  const actionKind = message.action?.kind;
+  if (actionKind === ACTION_KINDS.poopStart) {
+    remotePlayer.actionState.poopActive = true;
+    ensureRemotePoopRope(remotePlayer);
+    return;
+  }
+
+  if (actionKind === ACTION_KINDS.poopStop) {
+    remotePlayer.actionState.poopActive = false;
+    stopRemotePoopRope(remotePlayer);
+    return;
+  }
+
+  if (actionKind === ACTION_KINDS.strike) {
+    remotePlayer.actionState.strikeAt = message.action.at ?? performance.now();
+    remotePlayer.strikeTimer = strikeConfig.duration;
+  }
+}
+
+function handleLobbyWorldEvent(message) {
+  if (message.event?.kind === WORLD_EVENT_KINDS.targetHit) {
+    applyTargetHitVisuals(
+      new THREE.Vector3(
+        message.event.impactPoint?.x ?? 0,
+        message.event.impactPoint?.y ?? 0,
+        message.event.impactPoint?.z ?? 0,
+      ),
+      new THREE.Vector3(
+        message.event.velocity?.x ?? 0,
+        message.event.velocity?.y ?? 0,
+        message.event.velocity?.z ?? 0,
+      ),
+    );
+  }
+}
+
+function handleMultiplayerError(message) {
+  if (multiplayerState.menuOpen) {
+    updateLobbyMenuStatus(message);
+  }
+  setMessage(message);
+}
+
+function updateLobbyMenuStatus(text) {
+  lobbyMenuStatusEl.textContent = text;
+}
+
+function setMenuOpen(isOpen) {
+  multiplayerState.menuOpen = isOpen;
+  lobbyMenuEl.classList.toggle("hidden", !isOpen);
+  document.body.classList.toggle("menu-open", isOpen);
+}
+
+function updateLobbyCounts() {
+  for (const lobbyId of LOBBY_IDS) {
+    const count = multiplayerState.lobbyCounts[lobbyId] ?? 0;
+    const label = `${count} / ${MAX_PLAYERS_PER_LOBBY} spelare`;
+    if (lobbyCountEls[lobbyId]) {
+      lobbyCountEls[lobbyId].textContent = label;
+    }
+  }
+}
+
+function syncNetworkCard() {
+  const lobbyId = multiplayerState.lobbyId;
+  if (!lobbyId) {
+    networkCardEl.classList.add("hidden");
+    networkLobbyNameEl.textContent = "Ingen lobby";
+    networkStatusTextEl.textContent = "Inte ansluten";
+    return;
+  }
+
+  networkCardEl.classList.remove("hidden");
+  networkLobbyNameEl.textContent = LOBBY_LABELS[lobbyId];
+  networkStatusTextEl.textContent = `${multiplayerState.lobbyCounts[lobbyId] ?? 0} / ${MAX_PLAYERS_PER_LOBBY} spelare online`;
+}
+
+function resetInputState() {
+  input.forward = false;
+  input.backward = false;
+  input.left = false;
+  input.right = false;
+}
+
+function clearRemotePlayers() {
+  for (const remotePlayer of multiplayerState.remotePlayers.values()) {
+    if (remotePlayer.rope) {
+      const ropeIndex = poopRopes.indexOf(remotePlayer.rope);
+      if (ropeIndex >= 0) {
+        poopRopes.splice(ropeIndex, 1);
+      }
+      destroyPoopRope(remotePlayer.rope);
+      remotePlayer.rope = null;
+    }
+    remotePlayersRoot.remove(remotePlayer.avatar.root);
+    remotePlayer.avatar.root.traverse(disposeObject);
+  }
+  multiplayerState.remotePlayers.clear();
+}
+
+function removeRemotePlayer(playerId) {
+  const remotePlayer = multiplayerState.remotePlayers.get(playerId);
+  if (!remotePlayer) {
+    return;
+  }
+
+  if (remotePlayer.rope) {
+    const ropeIndex = poopRopes.indexOf(remotePlayer.rope);
+    if (ropeIndex >= 0) {
+      poopRopes.splice(ropeIndex, 1);
+    }
+    destroyPoopRope(remotePlayer.rope);
+    remotePlayer.rope = null;
+  }
+  remotePlayersRoot.remove(remotePlayer.avatar.root);
+  remotePlayer.avatar.root.traverse(disposeObject);
+  multiplayerState.remotePlayers.delete(playerId);
+}
+
+function ensureRemotePlayer(playerId, playerMeta = null) {
+  let remotePlayer = multiplayerState.remotePlayers.get(playerId);
+  if (remotePlayer) {
+    if (playerMeta?.name) {
+      remotePlayer.name = playerMeta.name;
+    }
+    if (playerMeta?.color) {
+      remotePlayer.color = playerMeta.color;
+    }
+    if (playerMeta?.actionState) {
+      remotePlayer.actionState = {
+        ...remotePlayer.actionState,
+        ...playerMeta.actionState,
+      };
+    }
+    return remotePlayer;
+  }
+
+  const avatar = createRemotePlayerAvatar(playerMeta?.color ?? "#7d8da1");
+  remotePlayersRoot.add(avatar.root);
+  remotePlayer = {
+    id: playerId,
+    name: playerMeta?.name ?? "Gast",
+    color: playerMeta?.color ?? "#7d8da1",
+    avatar,
+    actionState: {
+      ...createActionState(),
+      ...(playerMeta?.actionState ?? {}),
+    },
+    samples: [],
+    renderPose: null,
+    rope: null,
+    strikeTimer: 0,
+  };
+  multiplayerState.remotePlayers.set(playerId, remotePlayer);
+  if (remotePlayer.actionState.poopActive) {
+    ensureRemotePoopRope(remotePlayer);
+  }
+  return remotePlayer;
+}
+
+function queueRemotePose(playerId, playerMeta, pose) {
+  const remotePlayer = ensureRemotePlayer(playerId, playerMeta);
+  if (playerMeta?.actionState) {
+    remotePlayer.actionState = {
+      ...remotePlayer.actionState,
+      ...playerMeta.actionState,
+    };
+    if (remotePlayer.actionState.poopActive) {
+      ensureRemotePoopRope(remotePlayer);
+    }
+  }
+  const sample = {
+    time: performance.now(),
+    pose: {
+      x: pose?.x ?? PLAYER_SPAWN.x,
+      y: pose?.y ?? PLAYER_SPAWN.y,
+      z: pose?.z ?? PLAYER_SPAWN.z,
+      yaw: pose?.yaw ?? PLAYER_SPAWN.yaw,
+      moveAmount: pose?.moveAmount ?? 0,
+    },
+  };
+
+  remotePlayer.samples.push(sample);
+  if (remotePlayer.samples.length > 6) {
+    remotePlayer.samples.shift();
+  }
+
+  if (!remotePlayer.renderPose) {
+    remotePlayer.renderPose = { ...sample.pose };
+    updateRemotePlayerAvatar(remotePlayer.avatar, remotePlayer.renderPose, 0);
+  }
+}
+
+function interpolateRemotePose(firstPose, secondPose, t) {
+  return {
+    x: THREE.MathUtils.lerp(firstPose.x, secondPose.x, t),
+    y: THREE.MathUtils.lerp(firstPose.y, secondPose.y, t),
+    z: THREE.MathUtils.lerp(firstPose.z, secondPose.z, t),
+    yaw: lerpAngle(firstPose.yaw, secondPose.yaw, t),
+    moveAmount: THREE.MathUtils.lerp(firstPose.moveAmount, secondPose.moveAmount, t),
+  };
+}
+
+function sampleRemotePose(samples, now) {
+  if (samples.length === 0) {
+    return null;
+  }
+
+  const targetTime = now - REMOTE_INTERPOLATION_BACKTIME_MS;
+  while (samples.length > 2 && samples[1].time <= targetTime) {
+    samples.shift();
+  }
+
+  if (samples.length === 1 || targetTime <= samples[0].time) {
+    return { ...samples[0].pose };
+  }
+
+  const [first, second] = samples;
+  const span = Math.max(1, second.time - first.time);
+  const t = THREE.MathUtils.clamp((targetTime - first.time) / span, 0, 1);
+  return interpolateRemotePose(first.pose, second.pose, t);
+}
+
+function setLocalPoopActive(isActive) {
+  if (multiplayerState.localActionState.poopActive === isActive) {
+    return;
+  }
+
+  multiplayerState.localActionState.poopActive = isActive;
+  multiplayer.sendAction(isActive ? ACTION_KINDS.poopStart : ACTION_KINDS.poopStop);
+}
+
+function ensureRemotePoopRope(remotePlayer) {
+  if (remotePlayer.rope) {
+    remotePlayer.rope.isGrowing = true;
+    return;
+  }
+
+  const anchorPosition = remotePlayer.avatar.buttAnchor.getWorldPosition(tempVecQ).clone();
+  remotePlayer.rope = createPoopRope(anchorPosition, {
+    anchorResolver: () => remotePlayer.avatar.buttAnchor.getWorldPosition(tempVecQ).clone(),
+    yawResolver: () => remotePlayer.renderPose?.yaw ?? remotePlayer.avatar.root.rotation.y,
+  });
+  poopRopes.push(remotePlayer.rope);
+  trimPoopRopes();
+}
+
+function stopRemotePoopRope(remotePlayer) {
+  if (!remotePlayer.rope) {
+    return;
+  }
+
+  remotePlayer.rope.isGrowing = false;
+}
+
+function updateRemotePlayers(delta, now) {
+  for (const remotePlayer of multiplayerState.remotePlayers.values()) {
+    if (remotePlayer.actionState.poopActive && !remotePlayer.rope) {
+      ensureRemotePoopRope(remotePlayer);
+    }
+
+    const sampledPose = sampleRemotePose(remotePlayer.samples, now);
+    if (!sampledPose) {
+      continue;
+    }
+
+    if (!remotePlayer.renderPose) {
+      remotePlayer.renderPose = { ...sampledPose };
+    } else {
+      const followAmount = 1 - Math.exp(-delta * 14);
+      remotePlayer.renderPose.x = THREE.MathUtils.lerp(
+        remotePlayer.renderPose.x,
+        sampledPose.x,
+        followAmount,
+      );
+      remotePlayer.renderPose.y = THREE.MathUtils.lerp(
+        remotePlayer.renderPose.y,
+        sampledPose.y,
+        followAmount,
+      );
+      remotePlayer.renderPose.z = THREE.MathUtils.lerp(
+        remotePlayer.renderPose.z,
+        sampledPose.z,
+        followAmount,
+      );
+      remotePlayer.renderPose.yaw = lerpAngle(
+        remotePlayer.renderPose.yaw,
+        sampledPose.yaw,
+        followAmount,
+      );
+      remotePlayer.renderPose.moveAmount = THREE.MathUtils.lerp(
+        remotePlayer.renderPose.moveAmount,
+        sampledPose.moveAmount,
+        followAmount,
+      );
+    }
+
+    remotePlayer.strikeTimer = Math.max(0, remotePlayer.strikeTimer - delta);
+    updateRemotePlayerAvatar(
+      remotePlayer.avatar,
+      {
+        ...remotePlayer.renderPose,
+        poopAmount: remotePlayer.actionState.poopActive ? 1 : 0,
+        strikeAmount:
+          remotePlayer.strikeTimer > 0
+            ? Math.sin((1 - remotePlayer.strikeTimer / strikeConfig.duration) * Math.PI)
+            : 0,
+      },
+      delta,
+    );
+  }
+}
+
+function createLocalPosePacket() {
+  return {
+    x: state.playerPosition.x,
+    y: state.playerPosition.y,
+    z: state.playerPosition.z,
+    yaw: state.playerYaw,
+    moveAmount: state.moveAmount,
+  };
+}
+
+function updateMultiplayer(now) {
+  if (!multiplayerState.joined) {
+    return;
+  }
+
+  multiplayer.tick(now, createLocalPosePacket());
+}
+
+function lerpAngle(from, to, amount) {
+  const delta = Math.atan2(Math.sin(to - from), Math.cos(to - from));
+  return from + delta * amount;
+}
+
 function resetRound(initial = false) {
   stopPoopHold();
   clearProjectiles();
   clearPoopRopes();
   clearSplats();
   clearImpactBursts();
+  multiplayerState.localActionState = createActionState();
 
-  state.playerPosition.set(0, 0, 17.8);
-  state.playerYaw = Math.PI;
-  state.cameraYaw = Math.PI;
+  state.playerPosition.set(PLAYER_SPAWN.x, PLAYER_SPAWN.y, PLAYER_SPAWN.z);
+  state.playerYaw = PLAYER_SPAWN.yaw;
+  state.cameraYaw = PLAYER_SPAWN.yaw;
   state.cameraPitch = -0.2;
   state.moveAmount = 0;
   state.walkCycle = 0;
@@ -2764,9 +3289,11 @@ function resetRound(initial = false) {
   gameOverEl.classList.add("hidden");
   updateHud();
   setMessage(
-    initial
-      ? "Klicka i scenen for att lasa musen. Hall vanster mus nere pa telefonen for att borja bajsa, och tryck F om gubben i oknen behover stryk."
-      : "Ny runda. Hall vanster mus nere pa telefonen for att bygga en korv, och kliv av direkt om du vill bryta.",
+    !multiplayerState.joined
+      ? "Valj en lobby i menyn for att ga in i multiplayerlaget."
+      : initial
+        ? "Klicka i scenen for att lasa musen. Hall vanster mus nere pa telefonen for att borja bajsa, och tryck F om gubben i oknen behover stryk."
+        : "Ny runda. Hall vanster mus nere pa telefonen for att bygga en korv, och kliv av direkt om du vill bryta.",
   );
 }
 
@@ -2777,6 +3304,10 @@ function onResize() {
 }
 
 function onKeyDown(event) {
+  if (!multiplayerState.joined) {
+    return;
+  }
+
   if (event.code === "KeyW") {
     input.forward = true;
   }
@@ -2806,6 +3337,11 @@ function onKeyDown(event) {
 }
 
 function onKeyUp(event) {
+  if (!multiplayerState.joined) {
+    resetInputState();
+    return;
+  }
+
   if (event.code === "KeyW") {
     input.forward = false;
   }
@@ -2822,6 +3358,11 @@ function onKeyUp(event) {
 
 function onPointerDown(event) {
   if (event.button !== 0) {
+    return;
+  }
+
+  if (!multiplayerState.joined) {
+    setMessage("Valj en lobby i menyn innan du gar in i spelet.");
     return;
   }
 
@@ -2842,7 +3383,7 @@ function onPointerDown(event) {
 }
 
 function onPointerMove(event) {
-  if (!isPointerLocked()) {
+  if (!multiplayerState.joined || !isPointerLocked()) {
     return;
   }
 
@@ -2899,7 +3440,9 @@ function onPointerLockChange() {
   }
 
   stopPoopHold();
-  setMessage("Klicka i scenen för att låsa musen igen.");
+  if (multiplayerState.joined) {
+    setMessage("Klicka i scenen för att låsa musen igen.");
+  }
 }
 
 function onPointerLockError() {
@@ -2912,6 +3455,7 @@ function isPointerLocked() {
 
 function stopPoopHold(reason = "release") {
   const shouldReportPhoneExit = reason === "left-phone" && poopHoldState.started;
+  const wasPooping = Boolean(activePoopRope) || multiplayerState.localActionState.poopActive;
 
   poopHoldState.pointerId = null;
   poopHoldState.isPointerDown = false;
@@ -2921,6 +3465,10 @@ function stopPoopHold(reason = "release") {
   if (activePoopRope) {
     activePoopRope.isGrowing = false;
     activePoopRope = null;
+  }
+
+  if (wasPooping) {
+    setLocalPoopActive(false);
   }
 
   if (shouldReportPhoneExit) {
@@ -2952,6 +3500,7 @@ function updatePoopHold(delta) {
   activePoopRope = createPoopRope(hero.buttAnchor.getWorldPosition(tempVecA).clone());
   poopRopes.push(activePoopRope);
   trimPoopRopes();
+  setLocalPoopActive(true);
   setMessage("Trycket slapper. Hall kvar sa vaxer bajskorven.");
 }
 
@@ -2970,6 +3519,7 @@ function performStrike() {
   state.cooldown = strikeConfig.cooldown;
   state.strikeAnimation = strikeConfig.duration;
   state.strikeResolved = false;
+  multiplayer.sendAction(ACTION_KINDS.strike);
   setMessage("Du laddar upp en rak höger mot öken-gubben.");
 }
 
@@ -3326,9 +3876,6 @@ function updateStandingTarget(delta) {
   standingTarget.beacon.material.opacity =
     0.14 + Math.sin(clock.elapsedTime * 4.5) * 0.04 + targetState.hitFlash * 0.18;
   standingTarget.beacon.scale.setScalar(1 + Math.sin(clock.elapsedTime * 3.8) * 0.08);
-  standingTarget.beaconRing.position.y = 4 + Math.sin(clock.elapsedTime * 2.6) * 0.12;
-  standingTarget.beaconRing.scale.setScalar(1 + Math.sin(clock.elapsedTime * 6.8) * 0.16);
-  standingTarget.beaconRing.material.opacity = 0.72 + targetState.hitFlash * 0.22;
   standingTarget.planeMaterial.emissiveIntensity = targetState.hitFlash * 0.68;
   standingTarget.baseShadow.material.opacity = 0.16 + targetState.hitFlash * 0.14;
   standingTarget.root.updateMatrixWorld(true);
@@ -3450,7 +3997,7 @@ function isPointOnPhoneScreen(point) {
   );
 }
 
-function createPoopRope(anchorPosition) {
+function createPoopRope(anchorPosition, options = {}) {
   const baseMesh = new THREE.Mesh(undefined, poopTubeMaterial);
   baseMesh.castShadow = true;
   baseMesh.receiveShadow = true;
@@ -3465,6 +4012,8 @@ function createPoopRope(anchorPosition) {
     baseMesh,
     slimeMesh,
     anchorPosition: anchorPosition.clone(),
+    anchorResolver: options.anchorResolver ?? null,
+    yawResolver: options.yawResolver ?? null,
     spawnTimer: 0,
     isGrowing: true,
   };
@@ -3489,7 +4038,11 @@ function updatePoopRopes(delta) {
   for (let ropeIndex = poopRopes.length - 1; ropeIndex >= 0; ropeIndex -= 1) {
     const rope = poopRopes[ropeIndex];
     if (rope.isGrowing) {
-      rope.anchorPosition.copy(hero.buttAnchor.getWorldPosition(tempVecA));
+      if (rope.anchorResolver) {
+        rope.anchorPosition.copy(rope.anchorResolver());
+      } else {
+        rope.anchorPosition.copy(hero.buttAnchor.getWorldPosition(tempVecA));
+      }
       rope.spawnTimer += delta;
       while (
         rope.spawnTimer >= poopConfig.chainSpawnInterval &&
@@ -3501,9 +4054,9 @@ function updatePoopRopes(delta) {
 
       // Keep feeding the rope backward from the player, even while standing still.
       const backwardDirection = tempVecD.set(
-        -Math.sin(state.playerYaw),
+        -Math.sin(rope.yawResolver ? rope.yawResolver() : state.playerYaw),
         0,
-        -Math.cos(state.playerYaw),
+        -Math.cos(rope.yawResolver ? rope.yawResolver() : state.playerYaw),
       );
       const backwardLength = backwardDirection.lengthSq();
       if (backwardLength > 0.0001) {
@@ -3858,11 +4411,10 @@ function registerMiss(message = "Miss. Bara marken fick ta smallen.") {
   updateHud();
 }
 
-function registerTargetHit(impactPoint, velocity) {
+function applyTargetHitVisuals(impactPoint, velocity) {
   const hitForce = THREE.MathUtils.clamp(velocity.length() * 0.06, 1.2, 2.4);
   const localImpact = standingTarget.swayPivot.worldToLocal(tempVecP.copy(impactPoint));
   const horizontalOffset = THREE.MathUtils.clamp(localImpact.x / 0.55, -1, 1);
-  state.combo = 0;
   standingTarget.state.wobbleVelocity += hitForce + Math.abs(horizontalOffset) * 0.35;
   standingTarget.state.recoil = Math.min(
     standingTarget.state.recoil + 0.28 + hitForce * 0.05,
@@ -3870,12 +4422,25 @@ function registerTargetHit(impactPoint, velocity) {
   );
   standingTarget.state.twist += horizontalOffset * 0.2;
   standingTarget.state.hitFlash = 1;
+  createImpactBurst(impactPoint, velocity);
+  return hitForce;
+}
+
+function registerTargetHit(impactPoint, velocity, options = {}) {
+  const hitForce = applyTargetHitVisuals(impactPoint, velocity);
+  if (options.broadcast !== false) {
+    multiplayer.sendWorldEvent(WORLD_EVENT_KINDS.targetHit, {
+      impactPoint,
+      velocity,
+    });
+  }
+
+  state.combo = 0;
   state.hemorrhoids = THREE.MathUtils.clamp(
     state.hemorrhoids - (6 + hitForce * 0.8),
     0,
     100,
   );
-  createImpactBurst(impactPoint, velocity);
   setMessage(
     state.hemorrhoids > 0
       ? "Klockren smäll. Han gungar till där ute i öknen och hemorojdrisken sjunker."
@@ -4123,6 +4688,10 @@ function clearPoopRopes() {
     destroyPoopRope(poopRopes[index]);
     poopRopes.splice(index, 1);
   }
+  activePoopRope = null;
+  for (const remotePlayer of multiplayerState.remotePlayers.values()) {
+    remotePlayer.rope = null;
+  }
 }
 
 function clearSplats() {
@@ -4163,6 +4732,7 @@ function animate() {
   requestAnimationFrame(animate);
 
   const delta = Math.min(clock.getDelta(), 0.033);
+  const now = performance.now();
   if (state.cooldown > 0) {
     state.cooldown = Math.max(0, state.cooldown - delta);
   }
@@ -4175,6 +4745,8 @@ function animate() {
   updateAimMarker();
   updatePoopRopes(delta);
   updateProjectiles(delta);
+  updateRemotePlayers(delta, now);
+  updateMultiplayer(now);
   updateSmoke(delta);
   updateImpactBursts(delta);
   updateHemorrhoids(delta);

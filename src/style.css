@@ -35,6 +35,12 @@ body {
   font-family: "IBM Plex Sans", "Noto Sans", "Segoe UI", sans-serif;
 }
 
+body.menu-open,
+body.menu-open #app,
+body.menu-open #scene {
+  cursor: default;
+}
+
 body::before,
 body::after {
   content: "";
@@ -76,6 +82,120 @@ body::after {
   height: 100%;
   display: block;
   cursor: none;
+}
+
+.lobby-menu {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  display: grid;
+  place-items: center;
+  padding: 1.25rem;
+  background:
+    radial-gradient(circle at 50% 12%, rgba(255, 220, 142, 0.26), transparent 26%),
+    rgba(25, 37, 46, 0.22);
+  backdrop-filter: blur(12px);
+}
+
+.lobby-menu__panel,
+.network-card {
+  backdrop-filter: blur(18px);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.3), rgba(255, 255, 255, 0.12) 100%),
+    var(--panel-strong);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+}
+
+.lobby-menu__panel {
+  width: min(34rem, calc(100vw - 2rem));
+  padding: 1.4rem;
+  border-radius: 1.7rem;
+}
+
+.lobby-menu__panel h2 {
+  margin: 0;
+  font-family: "Bebas Neue", "IBM Plex Sans", sans-serif;
+  font-size: clamp(2rem, 5vw, 3.3rem);
+  line-height: 0.92;
+}
+
+.lobby-menu__copy,
+.lobby-menu__status,
+.lobby-menu__hint,
+.network-card__meta {
+  margin: 0;
+  line-height: 1.45;
+}
+
+.lobby-menu__copy {
+  margin-top: 0.6rem;
+  color: var(--muted);
+}
+
+.lobby-menu__status {
+  margin-top: 1rem;
+  font-weight: 700;
+}
+
+.lobby-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.8rem;
+  margin-top: 1rem;
+}
+
+.lobby-button {
+  appearance: none;
+  border: 1px solid rgba(120, 144, 160, 0.16);
+  border-radius: 1.2rem;
+  padding: 1rem;
+  text-align: left;
+  font: inherit;
+  color: var(--text);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.46), rgba(255, 255, 255, 0.2) 100%),
+    rgba(246, 241, 233, 0.8);
+  transition:
+    transform 160ms ease,
+    border-color 160ms ease,
+    box-shadow 160ms ease;
+  cursor: pointer;
+}
+
+.lobby-button:hover,
+.lobby-button:focus-visible {
+  transform: translateY(-1px);
+  border-color: rgba(217, 130, 63, 0.45);
+  box-shadow: 0 14px 32px rgba(64, 82, 96, 0.14);
+  outline: none;
+}
+
+.lobby-button[disabled] {
+  cursor: wait;
+  opacity: 0.66;
+  transform: none;
+}
+
+.lobby-button__label,
+.lobby-button__meta {
+  display: block;
+}
+
+.lobby-button__label {
+  font-weight: 700;
+  font-size: 1.02rem;
+}
+
+.lobby-button__meta {
+  margin-top: 0.28rem;
+  color: var(--muted);
+}
+
+.lobby-menu__hint {
+  margin-top: 1rem;
+  color: var(--muted);
+  font-size: 0.94rem;
 }
 
 .hud {
@@ -230,6 +350,16 @@ h1 {
   pointer-events: none;
 }
 
+.network-card {
+  position: absolute;
+  right: 1.2rem;
+  top: 12rem;
+  z-index: 2;
+  width: min(15rem, calc(100vw - 2.4rem));
+  padding: 0.9rem 1rem;
+  border-radius: 1.2rem;
+}
+
 .reticle::before,
 .reticle::after {
   content: "";
@@ -344,6 +474,11 @@ h1 {
   .hud-bottom {
     gap: 0.75rem;
   }
+
+  .network-card {
+    top: auto;
+    bottom: 10.6rem;
+  }
 }
 
 @media (max-width: 720px) {
@@ -365,6 +500,10 @@ h1 {
 
   .hud-bottom {
     bottom: 1rem;
+  }
+
+  .lobby-grid {
+    grid-template-columns: 1fr;
   }
 
   .mobile-controls {

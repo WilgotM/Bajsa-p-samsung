@@ -1,0 +1,11 @@
+name = "s25-ultra-poop-multiplayer"
+main = "src/index.js"
+compatibility_date = "2026-03-21"
+
+[[durable_objects.bindings]]
+name = "LOBBY_ROOM"
+class_name = "LobbyRoom"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["LobbyRoom"]

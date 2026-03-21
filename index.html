@@ -17,6 +17,47 @@
     <div id="app">
       <canvas id="scene"></canvas>
 
+      <section id="lobby-menu" class="lobby-menu" aria-live="polite">
+        <div class="lobby-menu__panel">
+          <p class="eyebrow">Cloudflare multiplayer</p>
+          <h2>Valj en fast lobby</h2>
+          <p class="lobby-menu__copy">
+            Spelet har tva alltid oppna lobbys. Valj en, anslut och klicka
+            sedan i scenen for att lasa musen.
+          </p>
+          <p id="lobby-menu-status" class="lobby-menu__status">
+            Hamtar lobby-status...
+          </p>
+
+          <div class="lobby-grid">
+            <button
+              id="join-main"
+              class="lobby-button"
+              type="button"
+              data-lobby-id="main"
+            >
+              <span class="lobby-button__label">Huvudlobby</span>
+              <span id="lobby-count-main" class="lobby-button__meta">0 / 8 spelare</span>
+            </button>
+
+            <button
+              id="join-secondary"
+              class="lobby-button"
+              type="button"
+              data-lobby-id="secondary"
+            >
+              <span class="lobby-button__label">Sekundar lobby</span>
+              <span id="lobby-count-secondary" class="lobby-button__meta">0 / 8 spelare</span>
+            </button>
+          </div>
+
+          <p class="lobby-menu__hint">
+            V1 synkar bara rorelse mellan spelare. Target, poang och skitfysik
+            ar fortfarande lokala.
+          </p>
+        </div>
+      </section>
+
       <section class="hud hud-top">
         <div class="brand-block">
           <p class="eyebrow">Sunkig simulator</p>
@@ -67,6 +108,12 @@
       </section>
 
       <div class="reticle" aria-hidden="true"></div>
+
+      <section id="network-card" class="network-card hidden" aria-live="polite">
+        <p class="label">Multiplayer</p>
+        <strong id="network-lobby-name">Ingen lobby</strong>
+        <p id="network-status-text" class="network-card__meta">Inte ansluten</p>
+      </section>
 
       <section id="game-over" class="game-over hidden" aria-live="polite">
         <p class="eyebrow">Game Over</p>
