@@ -41,9 +41,11 @@ const GROUND_LAYERS = {
   transition: 3,
   biomeDetail: 4,
   roads: 5,
-  roadMarks: 6,
-  water: 7,
-  glow: 8,
+  roadsOverlay: 6,
+  sidewalks: 7,
+  roadMarks: 8,
+  water: 9,
+  glow: 10,
 };
 
 const camera = new THREE.PerspectiveCamera(
@@ -143,7 +145,15 @@ const world = {
   snowCenter: new THREE.Vector3(-47, 0, -6),
   townCenter: new THREE.Vector3(0, 0, 46),
 };
+const TOWN_EXCLUSION_ZONE = Object.freeze({
+  type: "box",
+  x: world.townCenter.x,
+  z: world.townCenter.z - 1,
+  halfX: 28,
+  halfZ: 19,
+});
 const worldColliders = [];
+const groundSupports = [];
 const heroMetrics = {
   scale: 0.34,
   moveSpeed: 6.5,
@@ -273,6 +283,7 @@ function setupLights() {
 
 function setupWorld() {
   worldColliders.length = 0;
+  groundSupports.length = 0;
 
   const baseGround = new THREE.Mesh(
     new THREE.PlaneGeometry(174, 174),
@@ -376,12 +387,14 @@ function setupWorld() {
     length: 7.2,
     color: 0x4f5050,
     rotation: Math.PI / 2,
+    layer: GROUND_LAYERS.roads,
   });
   addRoadSegment({
     position: world.townCenter,
     width: 9.2,
     length: 30,
     color: 0x4d4f50,
+    layer: GROUND_LAYERS.roadsOverlay,
   });
   addTownLaneMarks();
 
@@ -486,6 +499,12 @@ function addLegacyMapPlate() {
   plate.position.y = -0.11;
   plate.receiveShadow = true;
   scene.add(plate);
+  registerRectGroundSupport({
+    position: plate.position,
+    width: 54.6,
+    depth: 54.6,
+    height: plate.position.y + 0.16,
+  });
 
   const ground = new THREE.Mesh(
     new THREE.PlaneGeometry(52, 52),
@@ -501,37 +520,12 @@ function addLegacyMapPlate() {
   configureGroundSurface(ground, { layer: GROUND_LAYERS.legacyMap });
   ground.receiveShadow = true;
   scene.add(ground);
-
-  const frame = new THREE.Mesh(
-    new THREE.RingGeometry(28.8, 32, 88),
-    new THREE.MeshStandardMaterial({
-      color: 0x918a7b,
-      roughness: 0.9,
-      metalness: 0.08,
-      transparent: true,
-      opacity: 0.92,
-    }),
-  );
-  frame.rotation.x = -Math.PI / 2;
-  frame.position.y = 0.026;
-  frame.scale.set(1, 1, 0.92);
-  configureGroundSurface(frame, { layer: GROUND_LAYERS.roads });
-  scene.add(frame);
-
-  const moatShadow = new THREE.Mesh(
-    new THREE.RingGeometry(26.8, 29.4, 88),
-    new THREE.MeshBasicMaterial({
-      color: 0x1a1a18,
-      transparent: true,
-      opacity: 0.1,
-      side: THREE.DoubleSide,
-    }),
-  );
-  moatShadow.rotation.x = -Math.PI / 2;
-  moatShadow.position.y = 0.018;
-  moatShadow.scale.set(1, 1, 0.92);
-  configureGroundSurface(moatShadow, { layer: GROUND_LAYERS.transition });
-  scene.add(moatShadow);
+  registerRectGroundSupport({
+    position: ground.position,
+    width: 52,
+    depth: 52,
+    height: ground.position.y,
+  });
 }
 
 function addTransitionGround() {
@@ -632,7 +626,10 @@ function addTransitionCover() {
     count: 22,
     seed: 451,
     minDistance: 2.4,
-    avoid: [{ type: "box", x: 0, z: 0, halfX: 30, halfZ: 30 }],
+    avoid: [
+      { type: "box", x: 0, z: 0, halfX: 30, halfZ: 30 },
+      TOWN_EXCLUSION_ZONE,
+    ],
   });
   const shrubMesh = new THREE.InstancedMesh(
     new THREE.SphereGeometry(0.56, 8, 8),
@@ -998,6 +995,7 @@ function addRoadSegment({
   color,
   rotation = 0,
   y = 0.016,
+  layer = GROUND_LAYERS.roads,
 }) {
   const road = new THREE.Mesh(
     new THREE.PlaneGeometry(width, length),
@@ -1010,9 +1008,16 @@ function addRoadSegment({
   road.rotation.x = -Math.PI / 2;
   road.rotation.z = rotation;
   road.position.set(position.x, y, position.z);
-  configureGroundSurface(road, { layer: GROUND_LAYERS.roads });
+  configureGroundSurface(road, { layer });
   road.receiveShadow = true;
   scene.add(road);
+  registerRectGroundSupport({
+    position: road.position,
+    width,
+    depth: length,
+    height: road.position.y,
+    rotation,
+  });
   return road;
 }
 
@@ -1478,29 +1483,51 @@ function addPineTrees(positions, baseScale = 1, colliderPadding = 0.24) {
 
 function addTownBiome() {
   const sidewalkMaterial = new THREE.MeshStandardMaterial({
-    color: 0xacaaa3,
+    color: 0xb2afa7,
     roughness: 0.95,
   });
-  const sidewalkA = new THREE.Mesh(new THREE.PlaneGeometry(36, 3), sidewalkMaterial);
-  sidewalkA.rotation.x = -Math.PI / 2;
-  sidewalkA.position.set(0, 0.02, world.townCenter.z + 10);
-  sidewalkA.receiveShadow = true;
-  scene.add(sidewalkA);
-  const sidewalkB = sidewalkA.clone();
-  sidewalkB.position.z = world.townCenter.z - 2;
-  scene.add(sidewalkB);
+  [
+    { position: new THREE.Vector3(0, 0, world.townCenter.z + 11), width: 37, length: 3.6 },
+    { position: new THREE.Vector3(0, 0, world.townCenter.z - 11), width: 37, length: 3.6 },
+    { position: new THREE.Vector3(8.1, 0, world.townCenter.z + 4), width: 3.4, length: 31.4 },
+    { position: new THREE.Vector3(-8.1, 0, world.townCenter.z + 4), width: 3.4, length: 31.4 },
+    { position: new THREE.Vector3(-19.8, 0, world.townCenter.z - 10), width: 11.6, length: 9.2 },
+    { position: new THREE.Vector3(19.8, 0, world.townCenter.z - 10), width: 11.6, length: 9.2 },
+    { position: new THREE.Vector3(-20.2, 0, world.townCenter.z + 7.8), width: 12.4, length: 9.6 },
+    { position: new THREE.Vector3(20.2, 0, world.townCenter.z + 7.8), width: 12.4, length: 9.6 },
+    { position: new THREE.Vector3(-12.2, 0, world.townCenter.z + 11.2), width: 8.8, length: 7.8 },
+    { position: new THREE.Vector3(12.2, 0, world.townCenter.z + 11.2), width: 8.8, length: 7.8 },
+  ].forEach(({ position, width, length }) => {
+    const sidewalk = new THREE.Mesh(new THREE.PlaneGeometry(width, length), sidewalkMaterial);
+    sidewalk.rotation.x = -Math.PI / 2;
+    sidewalk.position.set(position.x, 0.02, position.z);
+    configureGroundSurface(sidewalk, { layer: GROUND_LAYERS.sidewalks });
+    sidewalk.receiveShadow = true;
+    scene.add(sidewalk);
+    registerRectGroundSupport({
+      position: sidewalk.position,
+      width,
+      depth: length,
+      height: sidewalk.position.y,
+    });
+  });
 
-  const sidewalkC = new THREE.Mesh(new THREE.PlaneGeometry(3, 32), sidewalkMaterial);
-  sidewalkC.rotation.x = -Math.PI / 2;
-  sidewalkC.position.set(6, 0.02, world.townCenter.z + 4);
-  sidewalkC.receiveShadow = true;
-  scene.add(sidewalkC);
-  const sidewalkD = sidewalkC.clone();
-  sidewalkD.position.x = -6;
-  scene.add(sidewalkD);
+  [
+    { position: new THREE.Vector3(-19.8, 0, world.townCenter.z - 14.1), width: 9.2, length: 4.8 },
+    { position: new THREE.Vector3(19.8, 0, world.townCenter.z - 14.1), width: 9.2, length: 4.8 },
+  ].forEach(({ position, width, length }) => {
+    addRoadSegment({
+      position,
+      width,
+      length,
+      color: 0x676868,
+      y: 0.018,
+      layer: GROUND_LAYERS.roadsOverlay,
+    });
+  });
 
   createHouse({
-    position: new THREE.Vector3(-12, 0, 33),
+    position: new THREE.Vector3(-12.2, 0, 57.2),
     width: 6,
     depth: 5.6,
     height: 4.5,
@@ -1508,7 +1535,7 @@ function addTownBiome() {
     roofColor: 0x6d473a,
   });
   createHouse({
-    position: new THREE.Vector3(12, 0, 33),
+    position: new THREE.Vector3(12.2, 0, 57.2),
     width: 6.2,
     depth: 5.8,
     height: 4.7,
@@ -1516,7 +1543,7 @@ function addTownBiome() {
     roofColor: 0x45505f,
   });
   createHouse({
-    position: new THREE.Vector3(-12, 0, 47),
+    position: new THREE.Vector3(-20.2, 0, 53.8),
     width: 6.4,
     depth: 5.8,
     height: 4.8,
@@ -1524,7 +1551,7 @@ function addTownBiome() {
     roofColor: 0x596a42,
   });
   createHouse({
-    position: new THREE.Vector3(12, 0, 47),
+    position: new THREE.Vector3(20.2, 0, 53.8),
     width: 6,
     depth: 5.4,
     height: 4.4,
@@ -1532,7 +1559,7 @@ function addTownBiome() {
     roofColor: 0x826552,
   });
   createShop({
-    position: new THREE.Vector3(-20, 0, 39),
+    position: new THREE.Vector3(-19.8, 0, 36.2),
     width: 8.2,
     depth: 6.4,
     height: 3.8,
@@ -1540,7 +1567,7 @@ function addTownBiome() {
     trimColor: 0xe5c888,
   });
   createShop({
-    position: new THREE.Vector3(20, 0, 39),
+    position: new THREE.Vector3(19.8, 0, 36.2),
     width: 8.6,
     depth: 6.6,
     height: 3.6,
@@ -1549,23 +1576,41 @@ function addTownBiome() {
   });
 
   [
-    new THREE.Vector3(-4.4, 0, 31),
-    new THREE.Vector3(4.4, 0, 31),
-    new THREE.Vector3(-4.4, 0, 47),
-    new THREE.Vector3(4.4, 0, 47),
-    new THREE.Vector3(-15.6, 0, 39),
-    new THREE.Vector3(15.6, 0, 39),
+    new THREE.Vector3(-5.5, 0, 34.8),
+    new THREE.Vector3(5.5, 0, 34.8),
+    new THREE.Vector3(-5.5, 0, 57.2),
+    new THREE.Vector3(5.5, 0, 57.2),
+    new THREE.Vector3(-12.8, 0, 46),
+    new THREE.Vector3(12.8, 0, 46),
   ].forEach((position) => createStreetLamp(position));
 
-  createCar(new THREE.Vector3(-1.8, 0, 32.8), 0xc5463c);
-  createCar(new THREE.Vector3(1.8, 0, 43.4), 0x356792);
-  createCar(new THREE.Vector3(9.2, 0, 38.6), 0xe7cf8d, Math.PI / 2);
+  [
+    { position: new THREE.Vector3(-1.8, 0, 35.2), color: 0xc5463c, rotation: Math.PI / 2 },
+    { position: new THREE.Vector3(1.8, 0, 53.2), color: 0x356792, rotation: Math.PI / 2 },
+    { position: new THREE.Vector3(-19.8, 0, 31.9), color: 0xe7cf8d, rotation: Math.PI / 2 },
+    { position: new THREE.Vector3(19.8, 0, 31.9), color: 0x4f6d4d, rotation: Math.PI / 2 },
+  ].forEach(({ position, color, rotation }) => createCar(position, color, rotation));
+
+  [
+    new THREE.Vector3(-12.2, 0, 34.2),
+    new THREE.Vector3(12.2, 0, 34.2),
+    new THREE.Vector3(-11.4, 0, 58.6),
+    new THREE.Vector3(11.4, 0, 58.6),
+  ].forEach((position, index) => {
+    createTownPlanter(position, 2.5, 1.5, index < 2 ? 0x70845f : 0x7a8d66);
+  });
+  [
+    { position: new THREE.Vector3(-14.8, 0, 40.4), rotation: 0 },
+    { position: new THREE.Vector3(14.8, 0, 40.4), rotation: Math.PI },
+    { position: new THREE.Vector3(-14.2, 0, 49.8), rotation: 0 },
+    { position: new THREE.Vector3(14.2, 0, 49.8), rotation: Math.PI },
+  ].forEach(({ position, rotation }) => createTownBench(position, rotation));
 
   const cratePositions = [
-    new THREE.Vector3(-23.6, 0.38, 33.6),
-    new THREE.Vector3(-22.8, 0.38, 35.2),
-    new THREE.Vector3(23.1, 0.38, 43.8),
-    new THREE.Vector3(21.6, 0.38, 44.6),
+    new THREE.Vector3(-24.2, 0.38, 33.2),
+    new THREE.Vector3(-23.1, 0.38, 34.8),
+    new THREE.Vector3(24.1, 0.38, 33.6),
+    new THREE.Vector3(22.8, 0.38, 34.6),
   ];
   cratePositions.forEach((position, index) => {
     const crate = new THREE.Mesh(
@@ -1581,6 +1626,93 @@ function addTownBiome() {
     scene.add(crate);
     registerBoxCollider(position, 0.56, 0.56, 0.12);
   });
+}
+
+function createTownPlanter(position, width = 2.4, depth = 1.4, shrubColor = 0x728560) {
+  const group = new THREE.Group();
+  group.position.copy(position);
+
+  const curb = new THREE.Mesh(
+    new THREE.BoxGeometry(width, 0.26, depth),
+    new THREE.MeshStandardMaterial({
+      color: 0x8f8a80,
+      roughness: 0.94,
+    }),
+  );
+  curb.position.y = 0.13;
+  curb.castShadow = true;
+  curb.receiveShadow = true;
+  group.add(curb);
+
+  const soil = new THREE.Mesh(
+    new THREE.BoxGeometry(width * 0.78, 0.12, depth * 0.64),
+    new THREE.MeshStandardMaterial({
+      color: 0x6d5a43,
+      roughness: 1,
+    }),
+  );
+  soil.position.y = 0.24;
+  group.add(soil);
+
+  [-0.55, 0, 0.55].forEach((offset, index) => {
+    const shrub = new THREE.Mesh(
+      new THREE.SphereGeometry(0.34, 10, 10),
+      new THREE.MeshStandardMaterial({
+        color: index === 1 ? 0x869b71 : shrubColor,
+        roughness: 0.95,
+      }),
+    );
+    shrub.position.set(offset, 0.44 + (index % 2) * 0.04, 0);
+    shrub.scale.set(1 + (index % 2) * 0.12, 0.9, 1);
+    shrub.castShadow = true;
+    shrub.receiveShadow = true;
+    group.add(shrub);
+  });
+
+  scene.add(group);
+  registerBoxCollider(position, width / 2, depth / 2, 0.08);
+}
+
+function createTownBench(position, rotation = 0) {
+  const group = new THREE.Group();
+  group.position.copy(position);
+  group.rotation.y = rotation;
+
+  const woodMaterial = new THREE.MeshStandardMaterial({
+    color: 0x7a5b3f,
+    roughness: 0.9,
+  });
+  const metalMaterial = new THREE.MeshStandardMaterial({
+    color: 0x4d5258,
+    roughness: 0.82,
+    metalness: 0.18,
+  });
+
+  const seat = new THREE.Mesh(new THREE.BoxGeometry(1.45, 0.12, 0.42), woodMaterial);
+  seat.position.set(0, 0.54, 0);
+  seat.castShadow = true;
+  seat.receiveShadow = true;
+  group.add(seat);
+
+  const back = new THREE.Mesh(new THREE.BoxGeometry(1.45, 0.12, 0.36), woodMaterial);
+  back.position.set(0, 0.92, -0.17);
+  back.rotation.x = -0.26;
+  back.castShadow = true;
+  group.add(back);
+
+  [-0.56, 0.56].forEach((x) => {
+    const legFront = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.54, 0.08), metalMaterial);
+    legFront.position.set(x, 0.27, 0.14);
+    legFront.castShadow = true;
+    group.add(legFront);
+
+    const legBack = legFront.clone();
+    legBack.position.z = -0.14;
+    group.add(legBack);
+  });
+
+  scene.add(group);
+  registerBoxCollider(position, 0.86, 0.4, 0.06);
 }
 
 function createHouse({
@@ -1961,6 +2093,25 @@ function registerBoxCollider(position, halfX, halfZ, padding = 0.6) {
     halfX,
     halfZ,
     padding,
+  });
+}
+
+function registerRectGroundSupport({
+  position,
+  width,
+  depth,
+  height,
+  rotation = 0,
+  padding = 0.08,
+}) {
+  groundSupports.push({
+    type: "rect",
+    x: position.x,
+    z: position.z,
+    halfX: width / 2 + padding,
+    halfZ: depth / 2 + padding,
+    rotation,
+    height,
   });
 }
 
@@ -2384,6 +2535,10 @@ function createDangerRing() {
   );
   fill.rotation.x = -Math.PI / 2;
 
+  // Use the new render layers system so the ring sits ON TOP of all other ground layers
+  configureGroundSurface(fill, { layer: 10, transparent: true });
+  configureGroundSurface(outline, { layer: 11 });
+
   group.add(outline, fill);
   group.userData = { fill, outline };
   return group;
@@ -2407,6 +2562,7 @@ function createStandingTarget() {
   );
   baseShadow.rotation.x = -Math.PI / 2;
   baseShadow.position.y = 0.012;
+  configureGroundSurface(baseShadow, { layer: GROUND_LAYERS.glow, transparent: true });
   root.add(baseShadow);
 
   const podium = new THREE.Mesh(
@@ -2878,8 +3034,31 @@ function isInsidePhoneSupport(localPosition) {
 }
 
 function getSupportHeight(position) {
+  let supportHeight = 0;
   const local = phoneRig.worldToLocal(tempVecA.copy(position));
-  return isInsidePhoneSupport(local) ? getPhoneTopY() : 0;
+  if (isInsidePhoneSupport(local)) {
+    supportHeight = getPhoneTopY();
+  }
+
+  groundSupports.forEach((support) => {
+    const offsetX = position.x - support.x;
+    const offsetZ = position.z - support.z;
+    const cosRotation = Math.cos(support.rotation);
+    const sinRotation = Math.sin(support.rotation);
+    const localX = offsetX * cosRotation + offsetZ * sinRotation;
+    const localZ = -offsetX * sinRotation + offsetZ * cosRotation;
+
+    if (Math.abs(localX) <= support.halfX && Math.abs(localZ) <= support.halfZ) {
+      supportHeight = Math.max(supportHeight, support.height);
+    }
+  });
+
+  return supportHeight;
+}
+
+function isStandingOnPhone(position) {
+  const local = phoneRig.worldToLocal(tempVecH.copy(position));
+  return isInsidePhoneSupport(local);
 }
 
 function clampWorldPointToPhoneScreen(point, surfaceOffset = 0.03) {
@@ -2958,7 +3137,7 @@ function updatePlayer(delta) {
     state.playerPosition.y = getSupportHeight(state.playerPosition);
   }
 
-  state.isOnPhone = state.grounded && state.playerPosition.y > 0.05;
+  state.isOnPhone = state.grounded && isStandingOnPhone(state.playerPosition);
 
   hero.root.position.copy(state.playerPosition);
   hero.root.rotation.y = state.playerYaw;
@@ -3683,9 +3862,7 @@ function registerTargetHit(impactPoint, velocity) {
   const hitForce = THREE.MathUtils.clamp(velocity.length() * 0.06, 1.2, 2.4);
   const localImpact = standingTarget.swayPivot.worldToLocal(tempVecP.copy(impactPoint));
   const horizontalOffset = THREE.MathUtils.clamp(localImpact.x / 0.55, -1, 1);
-  state.hits += 1;
-  state.combo += 1;
-  state.score += 16 + state.combo * 10;
+  state.combo = 0;
   standingTarget.state.wobbleVelocity += hitForce + Math.abs(horizontalOffset) * 0.35;
   standingTarget.state.recoil = Math.min(
     standingTarget.state.recoil + 0.28 + hitForce * 0.05,
