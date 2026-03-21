@@ -46,6 +46,7 @@ export class MultiplayerClient {
     onStateChange = () => {},
     onWelcome = () => {},
     onPresence = () => {},
+    onMatchState = () => {},
     onPose = () => {},
     onAction = () => {},
     onWorldEvent = () => {},
@@ -56,6 +57,7 @@ export class MultiplayerClient {
     this.onStateChange = onStateChange;
     this.onWelcome = onWelcome;
     this.onPresence = onPresence;
+    this.onMatchState = onMatchState;
     this.onPose = onPose;
     this.onAction = onAction;
     this.onWorldEvent = onWorldEvent;
@@ -183,6 +185,11 @@ export class MultiplayerClient {
       return;
     }
 
+    if (message.type === "match-state") {
+      this.onMatchState(message);
+      return;
+    }
+
     if (message.type === "pose") {
       this.onPose(message);
       return;
@@ -216,6 +223,32 @@ export class MultiplayerClient {
           kind,
           ...data,
         },
+      }),
+    );
+  }
+
+  sendReady(ready) {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      return;
+    }
+
+    this.ws.send(
+      JSON.stringify({
+        type: "ready",
+        ready: Boolean(ready),
+      }),
+    );
+  }
+
+  sendPlayerState(playerPhase) {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      return;
+    }
+
+    this.ws.send(
+      JSON.stringify({
+        type: "player-state",
+        playerPhase,
       }),
     );
   }

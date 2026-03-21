@@ -198,8 +198,24 @@ body.menu-open #scene {
 }
 .fn-secondary .btn-meta { font-family: "Outfit", sans-serif; font-size: 1rem; font-weight: 900; }
 
+.fn-solo {
+  background: #ff8a3d;
+  color: #1c1208;
+  text-shadow: none;
+}
+.fn-solo .btn-meta { color: rgba(28, 18, 8, 0.78); text-shadow: none; font-family: "Outfit", sans-serif; font-size: 1rem; font-weight: 900; }
+
 .fn-danger {
   background: var(--fn-danger);
+}
+
+.match-ready-btn {
+  width: 100%;
+  margin: 1rem 0 1.2rem;
+}
+
+.match-ready-btn.is-ready {
+  background: #5cff8f;
 }
 
 /* IN-GAME HUD */
@@ -352,6 +368,192 @@ body.menu-open #scene {
   display: none !important;
 }
 
+.announcement-banner {
+  position: absolute;
+  left: 50%;
+  top: 1.6rem;
+  transform: translateX(-50%) rotate(-1deg);
+  z-index: 6;
+  background: linear-gradient(135deg, rgba(252,238,10,0.96), rgba(255,163,48,0.96));
+  border: 4px solid rgba(0,0,0,0.85);
+  border-radius: 18px;
+  box-shadow: 0 18px 40px rgba(0,0,0,0.35);
+  padding: 0.9rem 1.6rem;
+}
+
+.announcement-banner p {
+  margin: 0;
+  font-family: "Luckiest Guy", cursive;
+  font-size: clamp(1.8rem, 4vw, 3.2rem);
+  color: #111;
+  letter-spacing: 2px;
+  text-shadow: 2px 2px 0 rgba(255,255,255,0.4);
+}
+
+.match-panel {
+  position: absolute;
+  left: 1.2rem;
+  top: 8.8rem;
+  width: min(24rem, calc(100vw - 2.4rem));
+  z-index: 4;
+  padding: 1rem 1rem 1.1rem;
+  background:
+    linear-gradient(180deg, rgba(20, 36, 62, 0.92), rgba(10, 17, 29, 0.88));
+  border: 3px solid rgba(255,255,255,0.28);
+  border-radius: 18px;
+  box-shadow: 0 22px 45px rgba(0,0,0,0.35);
+  backdrop-filter: blur(12px);
+}
+
+.match-panel__top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.6rem;
+}
+
+.match-phase-label,
+.countdown-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  padding: 0.3rem 0.8rem;
+  font-weight: 900;
+  letter-spacing: 1px;
+}
+
+.match-phase-label {
+  background: rgba(97, 215, 255, 0.18);
+  border: 2px solid rgba(97, 215, 255, 0.38);
+  color: #b9f3ff;
+}
+
+.countdown-chip {
+  background: rgba(252, 238, 10, 0.95);
+  color: #141414;
+  border: 2px solid rgba(0,0,0,0.85);
+  font-family: "Luckiest Guy", cursive;
+  font-size: 1.1rem;
+}
+
+.match-panel h2 {
+  margin: 0;
+  color: #fff;
+  font-family: "Luckiest Guy", cursive;
+  font-size: 2.05rem;
+  letter-spacing: 1px;
+  text-shadow: 2px 2px 0 rgba(0,0,0,0.85);
+}
+
+.match-panel p {
+  margin: 0.35rem 0 0;
+  color: rgba(255,255,255,0.88);
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.lobby-player-list {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.lobby-player {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.65rem 0.8rem;
+  border-radius: 14px;
+  background: rgba(255,255,255,0.08);
+  border: 2px solid rgba(255,255,255,0.08);
+}
+
+.lobby-player__swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px rgba(255,255,255,0.15);
+}
+
+.lobby-player__name {
+  color: #fff;
+  font-weight: 800;
+}
+
+.lobby-player__status {
+  font-size: 0.9rem;
+  font-weight: 900;
+  letter-spacing: 0.5px;
+}
+
+.lobby-player__status--ready {
+  color: #8dff9a;
+}
+
+.lobby-player__status--waiting {
+  color: #ffc65a;
+}
+
+.jump-prompt {
+  position: absolute;
+  left: 50%;
+  bottom: 7.2rem;
+  transform: translateX(-50%);
+  z-index: 5;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.9rem;
+  padding: 0.85rem 1.2rem;
+  border-radius: 18px;
+  background: rgba(10, 18, 30, 0.88);
+  border: 3px solid rgba(255,255,255,0.22);
+  box-shadow: 0 16px 36px rgba(0,0,0,0.32);
+}
+
+.jump-prompt__key {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 4.9rem;
+  padding: 0.55rem 1rem;
+  border-radius: 14px;
+  background: var(--fn-yellow);
+  color: #131313;
+  border: 3px solid rgba(0,0,0,0.85);
+  font-family: "Luckiest Guy", cursive;
+  font-size: 1.35rem;
+  letter-spacing: 1px;
+}
+
+.jump-prompt__text {
+  color: #fff;
+  font-weight: 900;
+  font-size: 1.05rem;
+  letter-spacing: 1px;
+}
+
+.message-banner {
+  position: absolute;
+  left: 50%;
+  bottom: 1.6rem;
+  transform: translateX(-50%);
+  z-index: 4;
+  width: min(46rem, calc(100vw - 2rem));
+  padding: 0.9rem 1.1rem;
+  border-radius: 16px;
+  background: linear-gradient(180deg, rgba(15,21,33,0.9), rgba(9,13,22,0.78));
+  border: 2px solid rgba(255,255,255,0.14);
+  color: rgba(255,255,255,0.95);
+  font-weight: 800;
+  text-align: center;
+  letter-spacing: 0.3px;
+  box-shadow: 0 18px 38px rgba(0,0,0,0.25);
+  backdrop-filter: blur(8px);
+  pointer-events: none;
+}
+
 .network-card {
   position: absolute;
   right: 1.2rem;
@@ -394,4 +596,25 @@ body.menu-open #scene {
   .fn-panel h2 { font-size: 2rem; }
   .fn-button { font-size: 1.5rem; }
   .fn-scoreboard { flex-direction: column; gap: 0.5rem; }
+  .match-panel {
+    top: auto;
+    bottom: 10rem;
+    width: calc(100vw - 2rem);
+  }
+  .network-card {
+    top: 1rem;
+    right: 1rem;
+  }
+  .jump-prompt {
+    bottom: 8.9rem;
+    width: calc(100vw - 2rem);
+    justify-content: center;
+  }
+  .jump-prompt__text {
+    font-size: 0.95rem;
+  }
+  .message-banner {
+    bottom: 1rem;
+    font-size: 0.95rem;
+  }
 }

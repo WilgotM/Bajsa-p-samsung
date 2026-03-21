@@ -2,18 +2,48 @@ var __defProp = Object.defineProperty;
 var __name = (target, value) => __defProp(target, "name", { value, configurable: true });
 
 // ../shared/multiplayer.js
-var LOBBY_IDS = ["main", "secondary"];
+var LOBBY_IDS = ["solo", "main", "secondary"];
 var ARENA_RADIUS = 66;
 var MAX_PLAYERS_PER_LOBBY = 8;
+var MIN_PLAYERS_TO_START = 1;
 var POSE_SEND_INTERVAL_MS = 1e3 / 15;
 var MAX_PACKET_TELEPORT_DISTANCE = 4;
 var PLAYER_MIN_Y = -2;
 var PLAYER_MAX_Y = 12;
+var COUNTDOWN_DURATION_MS = 1e4;
+var BUS_FLIGHT_DURATION_MS = 18e3;
+var BUS_DOORS_OPEN_OFFSET_MS = 5200;
+var BUS_AUTO_DROP_OFFSET_MS = 15400;
+var MATCH_PHASES = Object.freeze({
+  staging: "staging",
+  countdown: "countdown",
+  bus: "bus",
+  glide: "glide",
+  active: "active"
+});
 var PLAYER_SPAWN = Object.freeze({
   x: 0,
   y: 0,
   z: 17.8,
   yaw: Math.PI
+});
+var STAGING_SPAWN = Object.freeze({
+  x: 0,
+  y: 6.4,
+  z: 88,
+  yaw: Math.PI
+});
+var BUS_ROUTE = Object.freeze({
+  start: Object.freeze({
+    x: -88,
+    y: 28,
+    z: 34
+  }),
+  end: Object.freeze({
+    x: 88,
+    y: 28,
+    z: -24
+  })
 });
 var ACTION_KINDS = Object.freeze({
   poopStart: "poop-start",
@@ -53,12 +83,20 @@ var GUEST_SUFFIXES = [
   "Kuf",
   "Kisare"
 ];
-function createSpawnPose() {
+function getSpawnForPhase(phase = MATCH_PHASES.active) {
+  if (phase === MATCH_PHASES.staging || phase === MATCH_PHASES.countdown) {
+    return STAGING_SPAWN;
+  }
+  return PLAYER_SPAWN;
+}
+__name(getSpawnForPhase, "getSpawnForPhase");
+function createSpawnPose(phase = MATCH_PHASES.active) {
+  const spawn = getSpawnForPhase(phase);
   return {
-    x: PLAYER_SPAWN.x,
-    y: PLAYER_SPAWN.y,
-    z: PLAYER_SPAWN.z,
-    yaw: PLAYER_SPAWN.yaw,
+    x: spawn.x,
+    y: spawn.y,
+    z: spawn.z,
+    yaw: spawn.yaw,
     moveAmount: 0
   };
 }
@@ -70,10 +108,39 @@ function createActionState() {
   };
 }
 __name(createActionState, "createActionState");
+function createMatchState() {
+  return {
+    phase: MATCH_PHASES.staging,
+    countdownEndsAt: null,
+    busStartedAt: null,
+    doorsOpenAt: null,
+    autoDropAt: null,
+    busEndsAt: null
+  };
+}
+__name(createMatchState, "createMatchState");
+function getBusSchedule(busStartedAt) {
+  if (!Number.isFinite(busStartedAt)) {
+    return createMatchState();
+  }
+  return {
+    phase: MATCH_PHASES.bus,
+    countdownEndsAt: null,
+    busStartedAt,
+    doorsOpenAt: busStartedAt + BUS_DOORS_OPEN_OFFSET_MS,
+    autoDropAt: busStartedAt + BUS_AUTO_DROP_OFFSET_MS,
+    busEndsAt: busStartedAt + BUS_FLIGHT_DURATION_MS
+  };
+}
+__name(getBusSchedule, "getBusSchedule");
 function isValidLobbyId(lobbyId) {
   return LOBBY_IDS.includes(lobbyId);
 }
 __name(isValidLobbyId, "isValidLobbyId");
+function isValidMatchPhase(phase) {
+  return Object.values(MATCH_PHASES).includes(phase);
+}
+__name(isValidMatchPhase, "isValidMatchPhase");
 function normalizeYaw(yaw) {
   if (!Number.isFinite(yaw)) {
     return PLAYER_SPAWN.yaw;
@@ -144,16 +211,19 @@ function createGuestProfile(index) {
   };
 }
 __name(createGuestProfile, "createGuestProfile");
-function serializePoseMessage(player) {
+function serializePlayerSnapshot(player) {
   return {
     id: player.id,
     name: player.name,
     color: player.color,
+    guestIndex: player.guestIndex,
     pose: player.pose,
-    actionState: player.actionState
+    actionState: player.actionState,
+    ready: Boolean(player.ready),
+    playerPhase: player.playerPhase
   };
 }
-__name(serializePoseMessage, "serializePoseMessage");
+__name(serializePlayerSnapshot, "serializePlayerSnapshot");
 function sanitizeVector3(value, fallback = { x: 0, y: 0, z: 0 }) {
   return {
     x: Number.isFinite(value?.x) ? value.x : fallback.x,
@@ -217,7 +287,10 @@ var LobbyRoom = class {
     this.lobbyId = null;
     this.players = /* @__PURE__ */ new Map();
     this.guestCounter = 0;
+    this.matchState = createMatchState();
+    this.phaseTimer = null;
     this.restorePlayers();
+    this.schedulePhaseTimer();
   }
   restorePlayers() {
     for (const websocket of this.ctx.getWebSockets()) {
@@ -230,11 +303,13 @@ var LobbyRoom = class {
         id: attachment.playerId,
         name: attachment.name,
         color: attachment.color,
-        pose: attachment.pose ?? createSpawnPose(),
+        pose: attachment.pose ?? createSpawnPose(attachment.playerPhase),
         actionState: attachment.actionState ?? createActionState(),
         websocket,
         joined: attachment.joined ?? false,
-        guestIndex: attachment.guestIndex ?? 0
+        guestIndex: attachment.guestIndex ?? 0,
+        ready: attachment.ready ?? false,
+        playerPhase: attachment.playerPhase ?? MATCH_PHASES.staging
       });
       this.guestCounter = Math.max(this.guestCounter, attachment.guestIndex + 1);
     }
@@ -244,7 +319,10 @@ var LobbyRoom = class {
     if (url.pathname === "/status") {
       return json({
         online: this.getJoinedPlayerCount() > 0,
-        playerCount: this.getJoinedPlayerCount()
+        playerCount: this.getJoinedPlayerCount(),
+        readyCount: this.getReadyCount(),
+        phase: this.matchState.phase,
+        countdownEndsAt: this.matchState.countdownEndsAt
       });
     }
     const connectMatch = url.pathname.match(/^\/connect\/([^/]+)$/);
@@ -260,29 +338,23 @@ var LobbyRoom = class {
       const pair = new WebSocketPair();
       const client = pair[0];
       const server = pair[1];
+      const playerPhase = this.getInitialPlayerPhase();
       this.ctx.acceptWebSocket(server);
       const player = {
         id: playerId,
         name: profile.name,
         color: profile.color,
-        pose: createSpawnPose(),
+        pose: createSpawnPose(playerPhase),
         actionState: createActionState(),
         websocket: server,
         joined: false,
-        guestIndex
-      };
-      server.serializeAttachment({
-        lobbyId,
-        playerId,
         guestIndex,
-        name: player.name,
-        color: player.color,
-        pose: player.pose,
-        actionState: player.actionState,
-        joined: false
-      });
+        ready: false,
+        playerPhase
+      };
       this.players.set(playerId, player);
       this.guestCounter += 1;
+      this.updateAttachment(player);
       return new Response(null, {
         status: 101,
         webSocket: client
@@ -321,6 +393,14 @@ var LobbyRoom = class {
       );
       return;
     }
+    if (payload.type === "ready") {
+      this.handleReady(player, payload.ready);
+      return;
+    }
+    if (payload.type === "player-state") {
+      this.handlePlayerState(player, payload.playerPhase);
+      return;
+    }
     if (payload.type === "pose") {
       this.handlePose(player, payload.pose);
       return;
@@ -349,13 +429,17 @@ var LobbyRoom = class {
   }
   handleHello(player) {
     player.joined = true;
+    player.playerPhase = this.getInitialPlayerPhase();
+    if (!player.pose) {
+      player.pose = createSpawnPose(player.playerPhase);
+    }
     this.updateAttachment(player);
     const others = [];
     for (const existingPlayer of this.players.values()) {
       if (existingPlayer.id === player.id || !existingPlayer.joined) {
         continue;
       }
-      others.push(serializePoseMessage(existingPlayer));
+      others.push(serializePlayerSnapshot(existingPlayer));
     }
     player.websocket.send(
       JSON.stringify({
@@ -365,7 +449,8 @@ var LobbyRoom = class {
         color: player.color,
         lobbyId: this.lobbyId,
         playerCount: this.getJoinedPlayerCount(),
-        players: others
+        players: others,
+        matchState: this.serializeMatchState()
       })
     );
     this.broadcast(
@@ -373,10 +458,44 @@ var LobbyRoom = class {
         type: "presence",
         action: "join",
         playerCount: this.getJoinedPlayerCount(),
-        player: serializePoseMessage(player)
+        player: serializePlayerSnapshot(player)
       },
       player.id
     );
+    this.reconcileMatchState(true);
+  }
+  handleReady(player, ready) {
+    if (!player.joined) {
+      return;
+    }
+    if (this.matchState.phase !== MATCH_PHASES.staging && this.matchState.phase !== MATCH_PHASES.countdown) {
+      return;
+    }
+    player.ready = Boolean(ready);
+    this.updateAttachment(player);
+    this.reconcileMatchState(true);
+  }
+  handlePlayerState(player, nextPhase) {
+    if (!player.joined || !isValidMatchPhase(nextPhase) || nextPhase === MATCH_PHASES.countdown) {
+      return;
+    }
+    if (nextPhase === MATCH_PHASES.staging && this.matchState.phase !== MATCH_PHASES.staging && this.matchState.phase !== MATCH_PHASES.countdown) {
+      return;
+    }
+    if (nextPhase === MATCH_PHASES.bus && this.matchState.phase !== MATCH_PHASES.bus) {
+      return;
+    }
+    if (nextPhase === MATCH_PHASES.glide && this.matchState.phase !== MATCH_PHASES.bus && this.matchState.phase !== MATCH_PHASES.active) {
+      return;
+    }
+    if (nextPhase === MATCH_PHASES.active && this.matchState.phase !== MATCH_PHASES.bus && this.matchState.phase !== MATCH_PHASES.active) {
+      return;
+    }
+    player.playerPhase = nextPhase;
+    player.ready = false;
+    player.actionState.poopActive = false;
+    this.updateAttachment(player);
+    this.broadcastMatchState();
   }
   handlePose(player, inputPose) {
     if (!player.joined) {
@@ -457,12 +576,157 @@ var LobbyRoom = class {
         type: "presence",
         action: "leave",
         playerCount: this.getJoinedPlayerCount(),
-        player: serializePoseMessage(player)
+        player: serializePlayerSnapshot(player)
       });
     }
     if (this.players.size === 0) {
+      this.clearPhaseTimer();
       this.guestCounter = 0;
       this.lobbyId = null;
+      this.matchState = createMatchState();
+      return;
+    }
+    this.reconcileMatchState(true);
+  }
+  onPhaseTimer() {
+    const now = Date.now();
+    if (this.matchState.phase === MATCH_PHASES.countdown && Number.isFinite(this.matchState.countdownEndsAt) && now >= this.matchState.countdownEndsAt) {
+      if (this.canStartCountdown()) {
+        this.startBusPhase();
+      } else {
+        this.matchState = createMatchState();
+        this.applyPlayerPhaseToJoinedPlayers(MATCH_PHASES.staging);
+        this.broadcastMatchState();
+        this.schedulePhaseTimer();
+      }
+      return;
+    }
+    if (this.matchState.phase === MATCH_PHASES.bus && Number.isFinite(this.matchState.busEndsAt) && now >= this.matchState.busEndsAt) {
+      this.enterActivePhase();
+      return;
+    }
+    this.schedulePhaseTimer();
+  }
+  canStartCountdown() {
+    const joinedPlayers = this.getJoinedPlayers();
+    return joinedPlayers.length >= MIN_PLAYERS_TO_START && joinedPlayers.every((player) => player.ready);
+  }
+  reconcileMatchState(shouldBroadcast = false) {
+    const joinedPlayers = this.getJoinedPlayers();
+    if (joinedPlayers.length === 0) {
+      this.matchState = createMatchState();
+      this.clearPhaseTimer();
+      return;
+    }
+    if (this.matchState.phase === MATCH_PHASES.bus || this.matchState.phase === MATCH_PHASES.active) {
+      if (shouldBroadcast) {
+        this.broadcastMatchState();
+      }
+      this.schedulePhaseTimer();
+      return;
+    }
+    if (this.canStartCountdown()) {
+      if (this.matchState.phase !== MATCH_PHASES.countdown || !Number.isFinite(this.matchState.countdownEndsAt)) {
+        this.matchState = {
+          ...createMatchState(),
+          phase: MATCH_PHASES.countdown,
+          countdownEndsAt: Date.now() + COUNTDOWN_DURATION_MS
+        };
+      }
+      this.applyPlayerPhaseToJoinedPlayers(MATCH_PHASES.staging);
+      this.broadcastMatchState();
+      this.schedulePhaseTimer();
+      return;
+    }
+    this.matchState = createMatchState();
+    this.applyPlayerPhaseToJoinedPlayers(MATCH_PHASES.staging);
+    if (shouldBroadcast) {
+      this.broadcastMatchState();
+    }
+    this.schedulePhaseTimer();
+  }
+  startBusPhase() {
+    this.matchState = getBusSchedule(Date.now());
+    this.applyPlayerPhaseToJoinedPlayers(MATCH_PHASES.bus);
+    for (const player of this.getJoinedPlayers()) {
+      player.ready = false;
+      player.actionState.poopActive = false;
+      this.updateAttachment(player);
+    }
+    this.broadcastMatchState();
+    this.schedulePhaseTimer();
+  }
+  enterActivePhase() {
+    this.matchState = {
+      ...createMatchState(),
+      phase: MATCH_PHASES.active
+    };
+    for (const player of this.getJoinedPlayers()) {
+      if (player.playerPhase === MATCH_PHASES.bus) {
+        player.playerPhase = MATCH_PHASES.active;
+        this.updateAttachment(player);
+      }
+    }
+    this.broadcastMatchState();
+    this.schedulePhaseTimer();
+  }
+  getInitialPlayerPhase() {
+    if (this.matchState.phase === MATCH_PHASES.bus) {
+      return MATCH_PHASES.bus;
+    }
+    if (this.matchState.phase === MATCH_PHASES.active) {
+      return MATCH_PHASES.active;
+    }
+    return MATCH_PHASES.staging;
+  }
+  applyPlayerPhaseToJoinedPlayers(phase) {
+    for (const player of this.getJoinedPlayers()) {
+      player.playerPhase = phase;
+      this.updateAttachment(player);
+    }
+  }
+  getJoinedPlayers() {
+    return Array.from(this.players.values()).filter((player) => player.joined);
+  }
+  getReadyCount() {
+    let count = 0;
+    for (const player of this.players.values()) {
+      if (player.joined && player.ready) {
+        count += 1;
+      }
+    }
+    return count;
+  }
+  serializeMatchState() {
+    return {
+      ...this.matchState,
+      playerCount: this.getJoinedPlayerCount(),
+      readyCount: this.getReadyCount(),
+      players: this.getJoinedPlayers().map(serializePlayerSnapshot)
+    };
+  }
+  broadcastMatchState() {
+    this.broadcast({
+      type: "match-state",
+      ...this.serializeMatchState()
+    });
+  }
+  schedulePhaseTimer() {
+    this.clearPhaseTimer();
+    const targetTime = this.matchState.phase === MATCH_PHASES.countdown ? this.matchState.countdownEndsAt : this.matchState.phase === MATCH_PHASES.bus ? this.matchState.busEndsAt : null;
+    if (!Number.isFinite(targetTime)) {
+      return;
+    }
+    const waitMs = Math.max(0, targetTime - Date.now());
+    this.phaseTimer = setTimeout(() => {
+      this.phaseTimer = null;
+      this.onPhaseTimer();
+    }, waitMs);
+  }
+  clearPhaseTimer() {
+    if (this.phaseTimer) {
+      clearTimeout(this.phaseTimer);
+      this.phaseTimer = null;
     }
   }
   findPlayerBySocket(websocket) {
@@ -491,7 +755,9 @@ var LobbyRoom = class {
       color: player.color,
       pose: player.pose,
       actionState: player.actionState,
-      joined: player.joined
+      joined: player.joined,
+      ready: player.ready,
+      playerPhase: player.playerPhase
     });
   }
   broadcast(message, excludedPlayerId = null) {

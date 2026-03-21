@@ -1,24 +1,58 @@
-export const LOBBY_IDS = ["main", "secondary"];
+export const LOBBY_IDS = ["solo", "main", "secondary"];
 
 export const LOBBY_LABELS = {
+  solo: "Solo-lobby",
   main: "Huvudlobby",
   secondary: "Sekundär lobby",
 };
 
 export const ARENA_RADIUS = 66;
 export const MAX_PLAYERS_PER_LOBBY = 8;
+export const MIN_PLAYERS_TO_START = 1;
 export const REMOTE_INTERPOLATION_BACKTIME_MS = 100;
 export const POSE_SEND_INTERVAL_MS = 1000 / 15;
 export const HEARTBEAT_INTERVAL_MS = 250;
 export const MAX_PACKET_TELEPORT_DISTANCE = 4;
 export const PLAYER_MIN_Y = -2;
 export const PLAYER_MAX_Y = 12;
+export const COUNTDOWN_DURATION_MS = 10_000;
+export const BUS_FLIGHT_DURATION_MS = 18_000;
+export const BUS_DOORS_OPEN_OFFSET_MS = 5_200;
+export const BUS_AUTO_DROP_OFFSET_MS = 15_400;
+
+export const MATCH_PHASES = Object.freeze({
+  staging: "staging",
+  countdown: "countdown",
+  bus: "bus",
+  glide: "glide",
+  active: "active",
+});
 
 export const PLAYER_SPAWN = Object.freeze({
   x: 0,
   y: 0,
   z: 17.8,
   yaw: Math.PI,
+});
+
+export const STAGING_SPAWN = Object.freeze({
+  x: 0,
+  y: 6.4,
+  z: 88,
+  yaw: Math.PI,
+});
+
+export const BUS_ROUTE = Object.freeze({
+  start: Object.freeze({
+    x: -88,
+    y: 28,
+    z: 34,
+  }),
+  end: Object.freeze({
+    x: 88,
+    y: 28,
+    z: -24,
+  }),
 });
 
 export const ACTION_KINDS = Object.freeze({
@@ -64,12 +98,21 @@ export const GUEST_SUFFIXES = [
   "Kisare",
 ];
 
-export function createSpawnPose() {
+export function getSpawnForPhase(phase = MATCH_PHASES.active) {
+  if (phase === MATCH_PHASES.staging || phase === MATCH_PHASES.countdown) {
+    return STAGING_SPAWN;
+  }
+
+  return PLAYER_SPAWN;
+}
+
+export function createSpawnPose(phase = MATCH_PHASES.active) {
+  const spawn = getSpawnForPhase(phase);
   return {
-    x: PLAYER_SPAWN.x,
-    y: PLAYER_SPAWN.y,
-    z: PLAYER_SPAWN.z,
-    yaw: PLAYER_SPAWN.yaw,
+    x: spawn.x,
+    y: spawn.y,
+    z: spawn.z,
+    yaw: spawn.yaw,
     moveAmount: 0,
   };
 }
@@ -81,8 +124,38 @@ export function createActionState() {
   };
 }
 
+export function createMatchState() {
+  return {
+    phase: MATCH_PHASES.staging,
+    countdownEndsAt: null,
+    busStartedAt: null,
+    doorsOpenAt: null,
+    autoDropAt: null,
+    busEndsAt: null,
+  };
+}
+
+export function getBusSchedule(busStartedAt) {
+  if (!Number.isFinite(busStartedAt)) {
+    return createMatchState();
+  }
+
+  return {
+    phase: MATCH_PHASES.bus,
+    countdownEndsAt: null,
+    busStartedAt,
+    doorsOpenAt: busStartedAt + BUS_DOORS_OPEN_OFFSET_MS,
+    autoDropAt: busStartedAt + BUS_AUTO_DROP_OFFSET_MS,
+    busEndsAt: busStartedAt + BUS_FLIGHT_DURATION_MS,
+  };
+}
+
 export function isValidLobbyId(lobbyId) {
   return LOBBY_IDS.includes(lobbyId);
+}
+
+export function isValidMatchPhase(phase) {
+  return Object.values(MATCH_PHASES).includes(phase);
 }
 
 export function normalizeYaw(yaw) {

@@ -11,20 +11,34 @@ Det här är ett litet 3D-webbspel byggt med Vite och Three.js.
 
 ## Multiplayer
 
-- Spelet har två fasta lobbys: `main` och `secondary`.
+- Spelet har tre fasta lobbys: `solo`, `main` och `secondary`.
 - Varje lobby drivs av en Cloudflare Durable Object.
 - Klienten pratar med Workern via WebSocket.
 - `GET /api/lobbies` används för att visa lobby-status i menyn.
 - `GET /connect/:lobbyId` öppnar WebSocket-anslutningen till rätt lobby.
+- Startmenyn har en `Spela solo`-knapp som går till `solo`-lobbyn och auto-sätter `Ready` för snabb teststart.
+- Matchflödet är serverstyrt och går genom faserna `staging` -> `countdown` -> `bus` -> `glide` -> `active`.
+- Countdown startar när minst en spelare är i samma lobby och alla anslutna spelare i den lobbyn har markerat `Ready` (så solo-test funkar).
+- Workern skickar `match-state` till klienterna med `phase`, `readyCount`, `countdownEndsAt` och battle bus-tidsstämplar.
+- Klienten kan skicka `ready` och `player-state` över WebSocket för att toggla redo-status och rapportera lokala fasbyten som glid/landning.
 
 ## Vad som synkas
 
 - Spelarens position, yaw och rörelsehastighet synkas mellan datorer.
+- Spelarens ready-status och nuvarande fas synkas också för väntelobbyn och battle bus-fasen.
 - Gameplay-händelser synkas också, till exempel:
   - `poop-start`
   - `poop-stop`
   - `strike`
   - `target-hit`
+
+## Matchstart
+
+- Spelarna väntar först i en separat 3D-staging-lobby i samma scen.
+- När countdownen är klar flyttas alla till battle bussen.
+- Dörrarna öppnas först när bussen är över ön, och då visas en tydlig `Space`-prompt.
+- Spelare som inte hoppar själva auto-droppas nära slutet av bussrutten.
+- Under `glide` sjunker spelaren långsamt och kan styra lite i luften innan vanlig gameplay tar vid på ön.
 
 ## Cloudflare
 

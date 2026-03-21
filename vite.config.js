@@ -2,4 +2,22 @@ import { defineConfig } from "vite";
 
 export default defineConfig({
   base: "./",
+  build: {
+    chunkSizeWarningLimit: 550,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes("/node_modules/three/")) {
+            return "three";
+          }
+
+          if (id.includes("/node_modules/")) {
+            return "vendor";
+          }
+
+          return undefined;
+        },
+      },
+    },
+  },
 });

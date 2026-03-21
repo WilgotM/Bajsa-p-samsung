@@ -34,6 +34,17 @@
           <p id="lobby-menu-status" class="lobby-menu__status">Hämtar lobby-status...</p>
 
           <div class="fn-lobby-grid">
+            <button
+              id="join-solo"
+              class="fn-button fn-solo"
+              type="button"
+              data-lobby-id="solo"
+              data-auto-ready="true"
+            >
+              <span class="btn-text">SPELA SOLO</span>
+              <span id="lobby-count-solo" class="btn-meta">0 / 8 spelare</span>
+            </button>
+
             <button id="join-main" class="fn-button fn-primary" type="button" data-lobby-id="main">
               <span class="btn-text">HUVUDLOBBY</span>
               <span id="lobby-count-main" class="btn-meta">0 / 8 spelare</span>
@@ -45,6 +56,26 @@
             </button>
           </div>
         </div>
+      </section>
+
+      <section id="announcement-banner" class="announcement-banner hidden" aria-live="assertive">
+        <p id="announcement-text">DÖRRARNA ÖPPNAS</p>
+      </section>
+
+      <section id="match-panel" class="match-panel hidden" aria-live="polite">
+        <div class="match-panel__top">
+          <span id="match-phase-label" class="match-phase-label">VÄNTELOBBY</span>
+          <span id="countdown-chip" class="countdown-chip hidden">10s</span>
+        </div>
+        <h2 id="match-panel-title">Vänta in squaden</h2>
+        <p id="match-panel-subtitle">Tryck Ready för att starta matchen.</p>
+        <button id="ready-btn" class="fn-button fn-primary match-ready-btn hidden" type="button">READY</button>
+        <div id="lobby-player-list" class="lobby-player-list"></div>
+      </section>
+
+      <section id="jump-prompt" class="jump-prompt hidden" aria-live="polite">
+        <span class="jump-prompt__key">SPACE</span>
+        <span class="jump-prompt__text">TRYCK SPACE FÖR ATT HOPPA</span>
       </section>
 
       <section class="hud hud-top">
@@ -77,6 +108,8 @@
       </section>
 
       <div class="reticle" aria-hidden="true"></div>
+
+      <section id="message" class="message-banner" aria-live="polite"></section>
 
       <section id="network-card" class="network-card hidden" aria-live="polite">
         <p class="label">Multiplayer</p>

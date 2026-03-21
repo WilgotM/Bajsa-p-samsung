@@ -1,17 +1,23 @@
 import {
   ACTION_KINDS,
+  COUNTDOWN_DURATION_MS,
   GUEST_PREFIXES,
   GUEST_SUFFIXES,
   LOBBY_IDS,
+  MATCH_PHASES,
   MAX_PACKET_TELEPORT_DISTANCE,
   MAX_PLAYERS_PER_LOBBY,
+  MIN_PLAYERS_TO_START,
   PLAYER_COLOR_PALETTE,
+  WORLD_EVENT_KINDS,
   clampPose,
   createActionState,
+  createMatchState,
   createSpawnPose,
+  getBusSchedule,
   getTeleportDistance,
   isValidLobbyId,
-  WORLD_EVENT_KINDS,
+  isValidMatchPhase,
 } from "../../shared/multiplayer.js";
 
 function json(data, init = {}) {
@@ -45,13 +51,16 @@ function createGuestProfile(index) {
   };
 }
 
-function serializePoseMessage(player) {
+function serializePlayerSnapshot(player) {
   return {
     id: player.id,
     name: player.name,
     color: player.color,
+    guestIndex: player.guestIndex,
     pose: player.pose,
     actionState: player.actionState,
+    ready: Boolean(player.ready),
+    playerPhase: player.playerPhase,
   };
 }
 
@@ -123,7 +132,10 @@ export class LobbyRoom {
     this.lobbyId = null;
     this.players = new Map();
     this.guestCounter = 0;
+    this.matchState = createMatchState();
+    this.phaseTimer = null;
     this.restorePlayers();
+    this.schedulePhaseTimer();
   }
 
   restorePlayers() {
@@ -138,11 +150,13 @@ export class LobbyRoom {
         id: attachment.playerId,
         name: attachment.name,
         color: attachment.color,
-        pose: attachment.pose ?? createSpawnPose(),
+        pose: attachment.pose ?? createSpawnPose(attachment.playerPhase),
         actionState: attachment.actionState ?? createActionState(),
         websocket,
         joined: attachment.joined ?? false,
         guestIndex: attachment.guestIndex ?? 0,
+        ready: attachment.ready ?? false,
+        playerPhase: attachment.playerPhase ?? MATCH_PHASES.staging,
       });
       this.guestCounter = Math.max(this.guestCounter, attachment.guestIndex + 1);
     }
@@ -155,6 +169,9 @@ export class LobbyRoom {
       return json({
         online: this.getJoinedPlayerCount() > 0,
         playerCount: this.getJoinedPlayerCount(),
+        readyCount: this.getReadyCount(),
+        phase: this.matchState.phase,
+        countdownEndsAt: this.matchState.countdownEndsAt,
       });
     }
 
@@ -173,6 +190,7 @@ export class LobbyRoom {
       const pair = new WebSocketPair();
       const client = pair[0];
       const server = pair[1];
+      const playerPhase = this.getInitialPlayerPhase();
 
       this.ctx.acceptWebSocket(server);
 
@@ -180,26 +198,18 @@ export class LobbyRoom {
         id: playerId,
         name: profile.name,
         color: profile.color,
-        pose: createSpawnPose(),
+        pose: createSpawnPose(playerPhase),
         actionState: createActionState(),
         websocket: server,
         joined: false,
         guestIndex,
+        ready: false,
+        playerPhase,
       };
-
-      server.serializeAttachment({
-        lobbyId,
-        playerId,
-        guestIndex,
-        name: player.name,
-        color: player.color,
-        pose: player.pose,
-        actionState: player.actionState,
-        joined: false,
-      });
 
       this.players.set(playerId, player);
       this.guestCounter += 1;
+      this.updateAttachment(player);
 
       return new Response(null, {
         status: 101,
@@ -245,6 +255,16 @@ export class LobbyRoom {
       return;
     }
 
+    if (payload.type === "ready") {
+      this.handleReady(player, payload.ready);
+      return;
+    }
+
+    if (payload.type === "player-state") {
+      this.handlePlayerState(player, payload.playerPhase);
+      return;
+    }
+
     if (payload.type === "pose") {
       this.handlePose(player, payload.pose);
       return;
@@ -280,6 +300,10 @@ export class LobbyRoom {
 
   handleHello(player) {
     player.joined = true;
+    player.playerPhase = this.getInitialPlayerPhase();
+    if (!player.pose) {
+      player.pose = createSpawnPose(player.playerPhase);
+    }
     this.updateAttachment(player);
 
     const others = [];
@@ -287,7 +311,7 @@ export class LobbyRoom {
       if (existingPlayer.id === player.id || !existingPlayer.joined) {
         continue;
       }
-      others.push(serializePoseMessage(existingPlayer));
+      others.push(serializePlayerSnapshot(existingPlayer));
     }
 
     player.websocket.send(
@@ -299,6 +323,7 @@ export class LobbyRoom {
         lobbyId: this.lobbyId,
         playerCount: this.getJoinedPlayerCount(),
         players: others,
+        matchState: this.serializeMatchState(),
       }),
     );
 
@@ -307,10 +332,69 @@ export class LobbyRoom {
         type: "presence",
         action: "join",
         playerCount: this.getJoinedPlayerCount(),
-        player: serializePoseMessage(player),
+        player: serializePlayerSnapshot(player),
       },
       player.id,
     );
+
+    this.reconcileMatchState(true);
+  }
+
+  handleReady(player, ready) {
+    if (!player.joined) {
+      return;
+    }
+
+    if (
+      this.matchState.phase !== MATCH_PHASES.staging &&
+      this.matchState.phase !== MATCH_PHASES.countdown
+    ) {
+      return;
+    }
+
+    player.ready = Boolean(ready);
+    this.updateAttachment(player);
+    this.reconcileMatchState(true);
+  }
+
+  handlePlayerState(player, nextPhase) {
+    if (!player.joined || !isValidMatchPhase(nextPhase) || nextPhase === MATCH_PHASES.countdown) {
+      return;
+    }
+
+    if (
+      nextPhase === MATCH_PHASES.staging &&
+      this.matchState.phase !== MATCH_PHASES.staging &&
+      this.matchState.phase !== MATCH_PHASES.countdown
+    ) {
+      return;
+    }
+
+    if (nextPhase === MATCH_PHASES.bus && this.matchState.phase !== MATCH_PHASES.bus) {
+      return;
+    }
+
+    if (
+      nextPhase === MATCH_PHASES.glide &&
+      this.matchState.phase !== MATCH_PHASES.bus &&
+      this.matchState.phase !== MATCH_PHASES.active
+    ) {
+      return;
+    }
+
+    if (
+      nextPhase === MATCH_PHASES.active &&
+      this.matchState.phase !== MATCH_PHASES.bus &&
+      this.matchState.phase !== MATCH_PHASES.active
+    ) {
+      return;
+    }
+
+    player.playerPhase = nextPhase;
+    player.ready = false;
+    player.actionState.poopActive = false;
+    this.updateAttachment(player);
+    this.broadcastMatchState();
   }
 
   handlePose(player, inputPose) {
@@ -406,13 +490,203 @@ export class LobbyRoom {
         type: "presence",
         action: "leave",
         playerCount: this.getJoinedPlayerCount(),
-        player: serializePoseMessage(player),
+        player: serializePlayerSnapshot(player),
       });
     }
 
     if (this.players.size === 0) {
+      this.clearPhaseTimer();
       this.guestCounter = 0;
       this.lobbyId = null;
+      this.matchState = createMatchState();
+      return;
+    }
+
+    this.reconcileMatchState(true);
+  }
+
+  onPhaseTimer() {
+    const now = Date.now();
+
+    if (
+      this.matchState.phase === MATCH_PHASES.countdown &&
+      Number.isFinite(this.matchState.countdownEndsAt) &&
+      now >= this.matchState.countdownEndsAt
+    ) {
+      if (this.canStartCountdown()) {
+        this.startBusPhase();
+      } else {
+        this.matchState = createMatchState();
+        this.applyPlayerPhaseToJoinedPlayers(MATCH_PHASES.staging);
+        this.broadcastMatchState();
+        this.schedulePhaseTimer();
+      }
+      return;
+    }
+
+    if (
+      this.matchState.phase === MATCH_PHASES.bus &&
+      Number.isFinite(this.matchState.busEndsAt) &&
+      now >= this.matchState.busEndsAt
+    ) {
+      this.enterActivePhase();
+      return;
+    }
+
+    this.schedulePhaseTimer();
+  }
+
+  canStartCountdown() {
+    const joinedPlayers = this.getJoinedPlayers();
+    return (
+      joinedPlayers.length >= MIN_PLAYERS_TO_START &&
+      joinedPlayers.every((player) => player.ready)
+    );
+  }
+
+  reconcileMatchState(shouldBroadcast = false) {
+    const joinedPlayers = this.getJoinedPlayers();
+
+    if (joinedPlayers.length === 0) {
+      this.matchState = createMatchState();
+      this.clearPhaseTimer();
+      return;
+    }
+
+    if (this.matchState.phase === MATCH_PHASES.bus || this.matchState.phase === MATCH_PHASES.active) {
+      if (shouldBroadcast) {
+        this.broadcastMatchState();
+      }
+      this.schedulePhaseTimer();
+      return;
+    }
+
+    if (this.canStartCountdown()) {
+      if (
+        this.matchState.phase !== MATCH_PHASES.countdown ||
+        !Number.isFinite(this.matchState.countdownEndsAt)
+      ) {
+        this.matchState = {
+          ...createMatchState(),
+          phase: MATCH_PHASES.countdown,
+          countdownEndsAt: Date.now() + COUNTDOWN_DURATION_MS,
+        };
+      }
+      this.applyPlayerPhaseToJoinedPlayers(MATCH_PHASES.staging);
+      this.broadcastMatchState();
+      this.schedulePhaseTimer();
+      return;
+    }
+
+    this.matchState = createMatchState();
+    this.applyPlayerPhaseToJoinedPlayers(MATCH_PHASES.staging);
+    if (shouldBroadcast) {
+      this.broadcastMatchState();
+    }
+    this.schedulePhaseTimer();
+  }
+
+  startBusPhase() {
+    this.matchState = getBusSchedule(Date.now());
+    this.applyPlayerPhaseToJoinedPlayers(MATCH_PHASES.bus);
+    for (const player of this.getJoinedPlayers()) {
+      player.ready = false;
+      player.actionState.poopActive = false;
+      this.updateAttachment(player);
+    }
+    this.broadcastMatchState();
+    this.schedulePhaseTimer();
+  }
+
+  enterActivePhase() {
+    this.matchState = {
+      ...createMatchState(),
+      phase: MATCH_PHASES.active,
+    };
+    for (const player of this.getJoinedPlayers()) {
+      if (player.playerPhase === MATCH_PHASES.bus) {
+        player.playerPhase = MATCH_PHASES.active;
+        this.updateAttachment(player);
+      }
+    }
+    this.broadcastMatchState();
+    this.schedulePhaseTimer();
+  }
+
+  getInitialPlayerPhase() {
+    if (this.matchState.phase === MATCH_PHASES.bus) {
+      return MATCH_PHASES.bus;
+    }
+
+    if (this.matchState.phase === MATCH_PHASES.active) {
+      return MATCH_PHASES.active;
+    }
+
+    return MATCH_PHASES.staging;
+  }
+
+  applyPlayerPhaseToJoinedPlayers(phase) {
+    for (const player of this.getJoinedPlayers()) {
+      player.playerPhase = phase;
+      this.updateAttachment(player);
+    }
+  }
+
+  getJoinedPlayers() {
+    return Array.from(this.players.values()).filter((player) => player.joined);
+  }
+
+  getReadyCount() {
+    let count = 0;
+    for (const player of this.players.values()) {
+      if (player.joined && player.ready) {
+        count += 1;
+      }
+    }
+    return count;
+  }
+
+  serializeMatchState() {
+    return {
+      ...this.matchState,
+      playerCount: this.getJoinedPlayerCount(),
+      readyCount: this.getReadyCount(),
+      players: this.getJoinedPlayers().map(serializePlayerSnapshot),
+    };
+  }
+
+  broadcastMatchState() {
+    this.broadcast({
+      type: "match-state",
+      ...this.serializeMatchState(),
+    });
+  }
+
+  schedulePhaseTimer() {
+    this.clearPhaseTimer();
+
+    const targetTime =
+      this.matchState.phase === MATCH_PHASES.countdown
+        ? this.matchState.countdownEndsAt
+        : this.matchState.phase === MATCH_PHASES.bus
+          ? this.matchState.busEndsAt
+          : null;
+
+    if (!Number.isFinite(targetTime)) {
+      return;
+    }
+
+    const waitMs = Math.max(0, targetTime - Date.now());
+    this.phaseTimer = setTimeout(() => {
+      this.phaseTimer = null;
+      this.onPhaseTimer();
+    }, waitMs);
+  }
+
+  clearPhaseTimer() {
+    if (this.phaseTimer) {
+      clearTimeout(this.phaseTimer);
+      this.phaseTimer = null;
     }
   }
 
@@ -446,6 +720,8 @@ export class LobbyRoom {
       pose: player.pose,
       actionState: player.actionState,
       joined: player.joined,
+      ready: player.ready,
+      playerPhase: player.playerPhase,
     });
   }
 

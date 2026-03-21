@@ -1,17 +1,24 @@
 import "./style.css";
 import * as THREE from "three";
+import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { MultiplayerClient } from "./multiplayer-client.js";
 import { createRemotePlayerAvatar, updateRemotePlayerAvatar } from "./remote-player.js";
 import {
   ACTION_KINDS,
   ARENA_RADIUS,
+  BUS_ROUTE,
+  MATCH_PHASES,
   LOBBY_IDS,
   LOBBY_LABELS,
   MAX_PLAYERS_PER_LOBBY,
+  MIN_PLAYERS_TO_START,
   PLAYER_SPAWN,
   REMOTE_INTERPOLATION_BACKTIME_MS,
+  STAGING_SPAWN,
   WORLD_EVENT_KINDS,
   createActionState,
+  createMatchState,
+  getSpawnForPhase,
 } from "../shared/multiplayer.js";
 
 const canvas = document.querySelector("#scene");
@@ -24,6 +31,16 @@ const meterFillEl = document.querySelector("#meter-fill");
 const gameOverEl = document.querySelector("#game-over");
 const lobbyMenuEl = document.querySelector("#lobby-menu");
 const lobbyMenuStatusEl = document.querySelector("#lobby-menu-status");
+const matchPanelEl = document.querySelector("#match-panel");
+const matchPanelTitleEl = document.querySelector("#match-panel-title");
+const matchPanelSubtitleEl = document.querySelector("#match-panel-subtitle");
+const matchPhaseLabelEl = document.querySelector("#match-phase-label");
+const countdownChipEl = document.querySelector("#countdown-chip");
+const readyBtn = document.querySelector("#ready-btn");
+const lobbyPlayerListEl = document.querySelector("#lobby-player-list");
+const announcementBannerEl = document.querySelector("#announcement-banner");
+const announcementTextEl = document.querySelector("#announcement-text");
+const jumpPromptEl = document.querySelector("#jump-prompt");
 
 const pauseMenuEl = document.querySelector("#pause-menu");
 const resumeBtn = document.querySelector("#resume-btn");
@@ -43,8 +60,7 @@ if (quitBtn) {
   quitBtn.addEventListener("click", () => {
     isPaused = false;
     pauseMenuEl.classList.add("hidden");
-    multiplayerState.menuOpen = true;
-    lobbyMenuEl.classList.remove("hidden");
+    setMenuOpen(true);
     multiplayer.disconnect(true);
     if (document.pointerLockElement) {
       document.exitPointerLock();
@@ -63,11 +79,13 @@ setTimeout(() => {
 const networkCardEl = document.querySelector("#network-card");
 const networkLobbyNameEl = document.querySelector("#network-lobby-name");
 const networkStatusTextEl = document.querySelector("#network-status-text");
-const joinButtons = Array.from(document.querySelectorAll(".lobby-button"));
+const joinButtons = Array.from(lobbyMenuEl.querySelectorAll("[data-lobby-id]"));
 const lobbyCountEls = {
+  solo: document.querySelector("#lobby-count-solo"),
   main: document.querySelector("#lobby-count-main"),
   secondary: document.querySelector("#lobby-count-secondary"),
 };
+let pendingAutoReadyAfterJoin = false;
 
 const renderer = new THREE.WebGLRenderer({
   canvas,
@@ -83,8 +101,13 @@ renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.12;
 
 const scene = new THREE.Scene();
-scene.fog = new THREE.FogExp2(0x9fb1af, 0.0135);
+scene.fog = new THREE.FogExp2(0xc9e6ff, 0.0075);
 const textureLoader = new THREE.TextureLoader();
+const daySkyTexture = textureLoader.load("/textures/sky-day.jpg");
+daySkyTexture.colorSpace = THREE.SRGBColorSpace;
+daySkyTexture.mapping = THREE.EquirectangularReflectionMapping;
+scene.background = daySkyTexture;
+const gltfLoader = new GLTFLoader();
 const groundTexture = textureLoader.load("/textures/ground-cover.jpg");
 groundTexture.colorSpace = THREE.SRGBColorSpace;
 groundTexture.anisotropy = renderer.capabilities.getMaxAnisotropy();
@@ -227,6 +250,22 @@ const heroMetrics = {
   cameraLift: 0.9,
   cameraLookDistance: 18,
 };
+const stagingPlatform = {
+  center: new THREE.Vector3(STAGING_SPAWN.x, STAGING_SPAWN.y - 0.26, STAGING_SPAWN.z),
+  height: STAGING_SPAWN.y,
+  halfX: 13,
+  halfZ: 9,
+};
+const glideConfig = {
+  airSpeed: 4.2,
+  turnSpeed: 5.6,
+  fallSpeed: 2.35,
+  landingThreshold: 0.18,
+};
+const busConfig = {
+  hoverLift: 0.7,
+  lookAhead: 9,
+};
 
 const state = {
   playerPosition: new THREE.Vector3(PLAYER_SPAWN.x, PLAYER_SPAWN.y, PLAYER_SPAWN.z),
@@ -249,6 +288,12 @@ const state = {
   poopAnimation: 0,
   strikeAnimation: 0,
   strikeResolved: true,
+  playerPhase: MATCH_PHASES.staging,
+  glideVelocity: new THREE.Vector3(),
+  localReady: false,
+  announcementKey: "",
+  doorPromptSeen: false,
+  autoDropTriggered: false,
 };
 
 const projectiles = [];
@@ -292,6 +337,7 @@ const dangerRing = createDangerRing();
 const standingTarget = createStandingTarget();
 const hero = buildHero();
 const remotePlayersRoot = new THREE.Group();
+const battleBus = createBattleBusRig();
 
 scene.add(phoneRig);
 scene.add(aimMarker);
@@ -299,17 +345,34 @@ scene.add(dangerRing);
 scene.add(standingTarget.root);
 scene.add(hero.root);
 scene.add(remotePlayersRoot);
+scene.add(battleBus.group);
 
 const multiplayerState = {
   selfId: null,
   lobbyId: null,
   joined: false,
+  selfName: "",
+  selfColor: "#fcee0a",
   localActionState: createActionState(),
+  matchState: createMatchState(),
   lobbyCounts: {
     main: 0,
     secondary: 0,
   },
+  lobbyStatus: {
+    main: {
+      playerCount: 0,
+      readyCount: 0,
+      phase: MATCH_PHASES.staging,
+    },
+    secondary: {
+      playerCount: 0,
+      readyCount: 0,
+      phase: MATCH_PHASES.staging,
+    },
+  },
   remotePlayers: new Map(),
+  playerRoster: new Map(),
   menuOpen: true,
 };
 
@@ -318,6 +381,7 @@ const multiplayer = new MultiplayerClient({
   onStateChange: handleMultiplayerStateChange,
   onWelcome: handleLobbyWelcome,
   onPresence: handleLobbyPresence,
+  onMatchState: handleMatchStateMessage,
   onPose: handleLobbyPose,
   onAction: handleLobbyAction,
   onWorldEvent: handleLobbyWorldEvent,
@@ -343,9 +407,467 @@ canvas.addEventListener("pointerleave", onPointerLeave);
 joinButtons.forEach((button) => {
   button.addEventListener("click", onLobbyButtonClick);
 });
+if (readyBtn) {
+  readyBtn.addEventListener("click", onReadyButtonClick);
+}
 
 initializeMultiplayerUi();
+loadBattleBusModel();
 animate();
+
+function createBattleBusRig() {
+  const group = new THREE.Group();
+  const fallback = createBattleBusFallback();
+  group.add(fallback);
+  group.visible = false;
+  return {
+    group,
+    fallback,
+    model: null,
+  };
+}
+
+function createBattleBusFallback() {
+  const root = new THREE.Group();
+  const balloonMaterial = new THREE.MeshStandardMaterial({
+    color: 0x4fb2ff,
+    roughness: 0.45,
+    metalness: 0.08,
+  });
+  const busMaterial = new THREE.MeshStandardMaterial({
+    color: 0x2755c8,
+    roughness: 0.52,
+    metalness: 0.18,
+  });
+  const trimMaterial = new THREE.MeshStandardMaterial({
+    color: 0xf5df3d,
+    roughness: 0.36,
+    metalness: 0.2,
+  });
+  const darkMaterial = new THREE.MeshStandardMaterial({
+    color: 0x22303f,
+    roughness: 0.72,
+    metalness: 0.06,
+  });
+
+  const balloon = new THREE.Mesh(new THREE.SphereGeometry(3.15, 20, 18), balloonMaterial);
+  balloon.scale.set(1, 0.95, 1.14);
+  balloon.position.set(0, 5.3, 0.2);
+  balloon.castShadow = true;
+  root.add(balloon);
+
+  const crown = new THREE.Mesh(new THREE.CylinderGeometry(0.72, 0.96, 1.1, 14), trimMaterial);
+  crown.position.set(0, 8.4, 0.2);
+  crown.castShadow = true;
+  root.add(crown);
+
+  const body = new THREE.Mesh(new THREE.BoxGeometry(4.8, 1.55, 2.05), busMaterial);
+  body.position.set(0, 1.1, 0);
+  body.castShadow = true;
+  body.receiveShadow = true;
+  root.add(body);
+
+  const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.1, 1.25, 1.85), darkMaterial);
+  cabin.position.set(1.55, 1.48, 0);
+  cabin.castShadow = true;
+  root.add(cabin);
+
+  const roof = new THREE.Mesh(new THREE.BoxGeometry(3.7, 0.3, 1.9), trimMaterial);
+  roof.position.set(-0.08, 2.02, 0);
+  roof.castShadow = true;
+  root.add(roof);
+
+  const harness = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.42, 1.7, 12), trimMaterial);
+  harness.position.set(0, 3.1, 0.15);
+  harness.castShadow = true;
+  root.add(harness);
+
+  const engine = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.74, 1.58), darkMaterial);
+  engine.position.set(-2.8, 1.03, 0);
+  engine.castShadow = true;
+  root.add(engine);
+
+  const cableGeometry = new THREE.CylinderGeometry(0.05, 0.05, 4.1, 10);
+  const cableOffsets = [
+    [-1.42, 3.4, -0.7],
+    [1.42, 3.4, -0.7],
+    [-1.42, 3.4, 0.7],
+    [1.42, 3.4, 0.7],
+  ];
+  cableOffsets.forEach(([x, y, z]) => {
+    const cable = new THREE.Mesh(cableGeometry, darkMaterial);
+    cable.position.set(x, y, z);
+    cable.castShadow = true;
+    root.add(cable);
+  });
+
+  const wheelGeometry = new THREE.CylinderGeometry(0.4, 0.4, 0.4, 16);
+  const wheelOffsets = [
+    [-1.6, 0.42, -1.12],
+    [1.4, 0.42, -1.12],
+    [-1.6, 0.42, 1.12],
+    [1.4, 0.42, 1.12],
+  ];
+  wheelOffsets.forEach(([x, y, z]) => {
+    const wheel = new THREE.Mesh(wheelGeometry, darkMaterial);
+    wheel.position.set(x, y, z);
+    wheel.rotation.z = Math.PI / 2;
+    wheel.castShadow = true;
+    root.add(wheel);
+  });
+
+  const thrusterGeometry = new THREE.CylinderGeometry(0.18, 0.25, 1.05, 12);
+  [-0.58, 0.58].forEach((z) => {
+    const thruster = new THREE.Mesh(thrusterGeometry, trimMaterial);
+    thruster.position.set(-2.85, 1.22, z);
+    thruster.rotation.z = Math.PI / 2;
+    thruster.castShadow = true;
+    root.add(thruster);
+  });
+
+  return root;
+}
+
+function loadBattleBusModel() {
+  gltfLoader.load(
+    "/models/battle-bus.glb",
+    (gltf) => {
+      const model = gltf.scene;
+      pruneBattleBusModel(model);
+      const box = new THREE.Box3().setFromObject(model);
+      const size = box.getSize(tempVecA);
+      const maxSide = Math.max(size.x, size.y, size.z, 1);
+      const scale = 8.2 / maxSide;
+      model.scale.setScalar(scale);
+      const normalizedBox = new THREE.Box3().setFromObject(model);
+      const center = normalizedBox.getCenter(tempVecB).clone();
+      const minY = normalizedBox.min.y;
+      model.position.sub(center);
+      model.position.y -= minY;
+      model.traverse((object) => {
+        if (object.isMesh) {
+          object.castShadow = true;
+          object.receiveShadow = true;
+        }
+      });
+      battleBus.group.add(model);
+      battleBus.model = model;
+      battleBus.fallback.visible = false;
+    },
+    undefined,
+    () => {
+      battleBus.fallback.visible = true;
+    },
+  );
+}
+
+function pruneBattleBusModel(model) {
+  const meshEntries = [];
+  model.updateMatrixWorld(true);
+  model.traverse((object) => {
+    if (!object.isMesh) {
+      return;
+    }
+
+    const box = new THREE.Box3().setFromObject(object);
+    const size = box.getSize(new THREE.Vector3());
+    const volume = size.x * size.y * size.z;
+    const maxDim = Math.max(size.x, size.y, size.z);
+    const minDim = Math.min(size.x, size.y, size.z);
+    const ratio = minDim > 0 ? maxDim / minDim : Number.POSITIVE_INFINITY;
+
+    meshEntries.push({
+      object,
+      size,
+      volume,
+      maxDim,
+      ratio,
+    });
+  });
+
+  if (meshEntries.length === 0) {
+    return;
+  }
+
+  meshEntries.sort((first, second) => second.maxDim - first.maxDim);
+  const largest = meshEntries[0];
+  const secondLargest = meshEntries[1]?.maxDim ?? 0;
+  const looksLikeHugeSphere =
+    largest.ratio < 1.35 &&
+    largest.maxDim > 100 &&
+    largest.maxDim > secondLargest * 2.4;
+
+  if (!looksLikeHugeSphere) {
+    return;
+  }
+
+  largest.object.parent?.remove(largest.object);
+}
+
+function getSortedRosterPlayers() {
+  return Array.from(multiplayerState.playerRoster.values()).sort(
+    (first, second) => (first.guestIndex ?? 0) - (second.guestIndex ?? 0),
+  );
+}
+
+function setRosterPlayers(players = []) {
+  multiplayerState.playerRoster.clear();
+  players.forEach((player) => {
+    multiplayerState.playerRoster.set(player.id, {
+      ...player,
+      ready: Boolean(player.ready),
+      playerPhase: player.playerPhase ?? MATCH_PHASES.staging,
+    });
+  });
+  syncLocalRosterState();
+  renderLobbyPlayerList();
+}
+
+function upsertRosterPlayer(player) {
+  if (!player?.id) {
+    return;
+  }
+
+  const previous = multiplayerState.playerRoster.get(player.id) ?? {};
+  multiplayerState.playerRoster.set(player.id, {
+    ...previous,
+    ...player,
+    ready: Boolean(player.ready ?? previous.ready),
+    playerPhase: player.playerPhase ?? previous.playerPhase ?? MATCH_PHASES.staging,
+  });
+  syncLocalRosterState();
+  renderLobbyPlayerList();
+}
+
+function removeRosterPlayer(playerId) {
+  multiplayerState.playerRoster.delete(playerId);
+  renderLobbyPlayerList();
+}
+
+function syncLocalRosterState() {
+  const localPlayer = multiplayerState.playerRoster.get(multiplayerState.selfId);
+  if (!localPlayer) {
+    return;
+  }
+
+  state.localReady = Boolean(localPlayer.ready);
+}
+
+function renderLobbyPlayerList() {
+  if (!lobbyPlayerListEl) {
+    return;
+  }
+
+  lobbyPlayerListEl.textContent = "";
+  const roster = getSortedRosterPlayers();
+  for (const player of roster) {
+    const row = document.createElement("div");
+    row.className = "lobby-player";
+
+    const swatch = document.createElement("span");
+    swatch.className = "lobby-player__swatch";
+    swatch.style.background = player.color ?? "#fff";
+
+    const name = document.createElement("span");
+    name.className = "lobby-player__name";
+    name.textContent = player.id === multiplayerState.selfId ? `${player.name} (du)` : player.name;
+
+    const status = document.createElement("span");
+    status.className = `lobby-player__status ${
+      player.ready ? "lobby-player__status--ready" : "lobby-player__status--waiting"
+    }`;
+    status.textContent = player.ready ? "Ready" : "Väntar";
+
+    row.append(swatch, name, status);
+    lobbyPlayerListEl.append(row);
+  }
+}
+
+function getMatchPhaseLabel(phase) {
+  if (phase === MATCH_PHASES.countdown) {
+    return "MATCH STARTAR";
+  }
+  if (phase === MATCH_PHASES.bus) {
+    return "BATTLE BUS";
+  }
+  if (phase === MATCH_PHASES.glide) {
+    return "GLIDER";
+  }
+  if (phase === MATCH_PHASES.active) {
+    return "PÅ ÖN";
+  }
+  return "VÄNTELOBBY";
+}
+
+function syncMatchPanel(now = Date.now()) {
+  if (!matchPanelEl) {
+    return;
+  }
+
+  const lobbyPhase = multiplayerState.matchState.phase ?? MATCH_PHASES.staging;
+  const playerCount = multiplayerState.matchState.playerCount ?? 0;
+  const readyCount = multiplayerState.matchState.readyCount ?? 0;
+
+  matchPanelEl.classList.toggle("hidden", !multiplayerState.joined || multiplayerState.menuOpen);
+  if (matchPhaseLabelEl) {
+    matchPhaseLabelEl.textContent = getMatchPhaseLabel(
+      state.playerPhase === MATCH_PHASES.glide ? MATCH_PHASES.glide : lobbyPhase,
+    );
+  }
+
+  if (matchPanelTitleEl) {
+    if (lobbyPhase === MATCH_PHASES.countdown) {
+      matchPanelTitleEl.textContent = "Alla är redo. Bussen går snart.";
+    } else if (lobbyPhase === MATCH_PHASES.bus) {
+      matchPanelTitleEl.textContent = "Battle Bus över ön";
+    } else if (state.playerPhase === MATCH_PHASES.glide) {
+      matchPanelTitleEl.textContent = "Segla ner mot ön";
+    } else if (lobbyPhase === MATCH_PHASES.active) {
+      matchPanelTitleEl.textContent = "Matchen är live";
+    } else {
+      matchPanelTitleEl.textContent =
+        playerCount <= 1 ? "Redo för solo-test" : "Vänta in squaden";
+    }
+  }
+
+  if (matchPanelSubtitleEl) {
+    if (lobbyPhase === MATCH_PHASES.staging || lobbyPhase === MATCH_PHASES.countdown) {
+      if (playerCount <= 0) {
+        matchPanelSubtitleEl.textContent = "Ansluter till lobbyn...";
+      } else if (playerCount === 1) {
+        matchPanelSubtitleEl.textContent =
+          `${readyCount}/1 redo. Tryck Ready för att starta en solo-match med battle bussen.`;
+      } else if (playerCount >= MIN_PLAYERS_TO_START) {
+        matchPanelSubtitleEl.textContent =
+          `${readyCount}/${playerCount} redo. Alla i lobbyn måste vara ready för att countdown ska fortsätta.`;
+      } else {
+        matchPanelSubtitleEl.textContent =
+          `Minst ${MIN_PLAYERS_TO_START} spelare behövs för att kunna starta matchen.`;
+      }
+    } else if (lobbyPhase === MATCH_PHASES.bus) {
+      matchPanelSubtitleEl.textContent = "Dörrarna öppnas först när bussen är över ön.";
+    } else if (state.playerPhase === MATCH_PHASES.glide) {
+      matchPanelSubtitleEl.textContent = "Du glider långsamt ner och kan styra lite lätt i luften.";
+    } else {
+      matchPanelSubtitleEl.textContent = "Landa och återgå till det vanliga kaoset.";
+    }
+  }
+
+  if (countdownChipEl) {
+    if (
+      lobbyPhase === MATCH_PHASES.countdown &&
+      Number.isFinite(multiplayerState.matchState.countdownEndsAt)
+    ) {
+      const secondsLeft = Math.max(
+        0,
+        Math.ceil((multiplayerState.matchState.countdownEndsAt - now) / 1000),
+      );
+      countdownChipEl.textContent = `${secondsLeft}s`;
+      countdownChipEl.classList.remove("hidden");
+    } else {
+      countdownChipEl.classList.add("hidden");
+    }
+  }
+
+  if (readyBtn) {
+    const showReady =
+      multiplayerState.joined &&
+      !multiplayerState.menuOpen &&
+      (lobbyPhase === MATCH_PHASES.staging || lobbyPhase === MATCH_PHASES.countdown);
+    readyBtn.classList.toggle("hidden", !showReady);
+    readyBtn.disabled = !showReady;
+    readyBtn.textContent = state.localReady ? "UNREADY" : "READY";
+    readyBtn.classList.toggle("is-ready", state.localReady);
+  }
+}
+
+function syncAnnouncementPrompts(now = Date.now()) {
+  const lobbyPhase = multiplayerState.matchState.phase ?? MATCH_PHASES.staging;
+  let bannerText = "";
+  let showJumpPrompt = false;
+
+  if (
+    lobbyPhase === MATCH_PHASES.bus &&
+    Number.isFinite(multiplayerState.matchState.doorsOpenAt) &&
+    now >= multiplayerState.matchState.doorsOpenAt
+  ) {
+    bannerText = "DÖRRARNA ÖPPNAS";
+    showJumpPrompt = state.playerPhase === MATCH_PHASES.bus;
+  }
+
+  if (announcementBannerEl) {
+    announcementBannerEl.classList.toggle("hidden", !bannerText);
+  }
+  if (announcementTextEl && bannerText) {
+    announcementTextEl.textContent = bannerText;
+  }
+  if (jumpPromptEl) {
+    jumpPromptEl.classList.toggle("hidden", !showJumpPrompt);
+  }
+}
+
+function getBusProgress(now = Date.now()) {
+  const startedAt = multiplayerState.matchState.busStartedAt;
+  const endsAt = multiplayerState.matchState.busEndsAt;
+  if (!Number.isFinite(startedAt) || !Number.isFinite(endsAt) || endsAt <= startedAt) {
+    return 0;
+  }
+
+  return THREE.MathUtils.clamp((now - startedAt) / (endsAt - startedAt), 0, 1);
+}
+
+function getBusTransform(now = Date.now()) {
+  const progress = getBusProgress(now);
+  const position = tempVecA
+    .set(BUS_ROUTE.start.x, BUS_ROUTE.start.y, BUS_ROUTE.start.z)
+    .lerp(tempVecB.set(BUS_ROUTE.end.x, BUS_ROUTE.end.y, BUS_ROUTE.end.z), progress)
+    .clone();
+  const direction = tempVecC
+    .set(
+      BUS_ROUTE.end.x - BUS_ROUTE.start.x,
+      BUS_ROUTE.end.y - BUS_ROUTE.start.y,
+      BUS_ROUTE.end.z - BUS_ROUTE.start.z,
+    )
+    .normalize()
+    .clone();
+  position.y += Math.sin(progress * Math.PI * 6) * 0.24 + busConfig.hoverLift;
+
+  return {
+    position,
+    direction,
+    progress,
+    yaw: Math.atan2(direction.x, direction.z),
+  };
+}
+
+function getBusSeatLocalOffset(guestIndex = 0) {
+  const lane = guestIndex % 2 === 0 ? -1 : 1;
+  const row = Math.floor(guestIndex / 2) % 4;
+  return tempVecD.set(lane * 1.25, 0.35, 1.55 - row * 0.9);
+}
+
+function getBusSeatWorldPosition(guestIndex = 0, now = Date.now(), target = new THREE.Vector3()) {
+  const transform = getBusTransform(now);
+  const localOffset = getBusSeatLocalOffset(guestIndex).clone();
+  localOffset.applyAxisAngle(upVector, transform.yaw);
+  return target.copy(transform.position).add(localOffset);
+}
+
+function updateBattleBusVisual(now = Date.now()) {
+  const shouldShow =
+    multiplayerState.joined &&
+    !multiplayerState.menuOpen &&
+    multiplayerState.matchState.phase === MATCH_PHASES.bus;
+  battleBus.group.visible = shouldShow;
+  if (!shouldShow) {
+    return;
+  }
+
+  const transform = getBusTransform(now);
+  battleBus.group.position.copy(transform.position);
+  battleBus.group.rotation.set(0, transform.yaw, 0);
+  battleBus.group.rotation.z = Math.sin(transform.progress * Math.PI * 4) * 0.02;
+}
 
 function setupLights() {
   const hemisphere = new THREE.HemisphereLight(0xdcecff, 0x5f6b56, 1.65);
@@ -496,6 +1018,7 @@ function setupWorld() {
   addSnowBiome();
   addTownBiome();
   addPerimeterRidge();
+  addStagingLobby();
 
   const dustGeometry = new THREE.SphereGeometry(0.05, 6, 6);
   for (let index = 0; index < 54; index += 1) {
@@ -544,37 +1067,98 @@ function setupWorld() {
   sunHalo.position.copy(sunDisc.position);
   scene.add(sunHalo);
 
-  for (let index = 0; index < 15; index += 1) {
-    const cloud = new THREE.Group();
-    const cloudMaterial = new THREE.MeshStandardMaterial({
-      color: 0xffffff,
-      roughness: 0.86,
-    });
-    const puffOffsets = [
-      [-0.8, 0, 0],
-      [-0.2, 0.16, 0.1],
-      [0.55, 0.08, 0],
-      [0.1, -0.04, 0.2],
-      [0.95, 0.02, -0.1],
-      [-1.05, 0.04, 0.08],
-    ];
-    puffOffsets.forEach(([x, y, z], puffIndex) => {
-      const puff = new THREE.Mesh(
-        new THREE.SphereGeometry(0.52 + puffIndex * 0.035, 12, 12),
-        cloudMaterial,
-      );
-      puff.position.set(x, y, z);
-      puff.scale.y = 0.72;
-      cloud.add(puff);
-    });
-    cloud.position.set(
-      THREE.MathUtils.randFloatSpread(86),
-      9 + Math.random() * 8.5,
-      -24 - Math.random() * 52,
+}
+
+function addStagingLobby() {
+  const pad = new THREE.Mesh(
+    new THREE.BoxGeometry(stagingPlatform.halfX * 2, 0.52, stagingPlatform.halfZ * 2),
+    new THREE.MeshStandardMaterial({
+      color: 0x223449,
+      roughness: 0.72,
+      metalness: 0.18,
+    }),
+  );
+  pad.position.copy(stagingPlatform.center);
+  pad.receiveShadow = true;
+  pad.castShadow = true;
+  scene.add(pad);
+  registerRectGroundSupport({
+    position: pad.position,
+    width: stagingPlatform.halfX * 2,
+    depth: stagingPlatform.halfZ * 2,
+    height: stagingPlatform.height,
+  });
+
+  const trim = new THREE.Mesh(
+    new THREE.BoxGeometry(stagingPlatform.halfX * 2 + 0.8, 0.12, stagingPlatform.halfZ * 2 + 0.8),
+    new THREE.MeshStandardMaterial({
+      color: 0xf7d62f,
+      roughness: 0.28,
+      metalness: 0.32,
+      emissive: 0xcda500,
+      emissiveIntensity: 0.2,
+    }),
+  );
+  trim.position.set(stagingPlatform.center.x, stagingPlatform.height + 0.04, stagingPlatform.center.z);
+  trim.receiveShadow = true;
+  scene.add(trim);
+
+  const hologram = new THREE.Mesh(
+    new THREE.CylinderGeometry(5.4, 5.4, 0.06, 48),
+    new THREE.MeshBasicMaterial({
+      color: 0x61d7ff,
+      transparent: true,
+      opacity: 0.24,
+    }),
+  );
+  hologram.position.set(stagingPlatform.center.x, stagingPlatform.height + 0.08, stagingPlatform.center.z);
+  scene.add(hologram);
+
+  const banner = new THREE.Mesh(
+    new THREE.BoxGeometry(7.4, 2.2, 0.28),
+    new THREE.MeshStandardMaterial({
+      color: 0x1d2941,
+      roughness: 0.42,
+      metalness: 0.16,
+      emissive: 0x0f1729,
+      emissiveIntensity: 0.18,
+    }),
+  );
+  banner.position.set(stagingPlatform.center.x, stagingPlatform.height + 3.6, stagingPlatform.center.z - 7.9);
+  banner.castShadow = true;
+  scene.add(banner);
+
+  const lightPostGeometry = new THREE.CylinderGeometry(0.12, 0.16, 4.8, 12);
+  const lightMaterial = new THREE.MeshStandardMaterial({
+    color: 0x394250,
+    roughness: 0.84,
+    metalness: 0.12,
+  });
+  const lightGlowMaterial = new THREE.MeshBasicMaterial({
+    color: 0xfcee0a,
+    transparent: true,
+    opacity: 0.72,
+  });
+  const corners = [
+    [-stagingPlatform.halfX + 1.2, -stagingPlatform.halfZ + 1.2],
+    [stagingPlatform.halfX - 1.2, -stagingPlatform.halfZ + 1.2],
+    [-stagingPlatform.halfX + 1.2, stagingPlatform.halfZ - 1.2],
+    [stagingPlatform.halfX - 1.2, stagingPlatform.halfZ - 1.2],
+  ];
+  corners.forEach(([offsetX, offsetZ]) => {
+    const post = new THREE.Mesh(lightPostGeometry, lightMaterial);
+    post.position.set(
+      stagingPlatform.center.x + offsetX,
+      stagingPlatform.height + 2.2,
+      stagingPlatform.center.z + offsetZ,
     );
-    cloud.scale.setScalar(1 + Math.random() * 0.55);
-    scene.add(cloud);
-  }
+    post.castShadow = true;
+    scene.add(post);
+
+    const glow = new THREE.Mesh(new THREE.SphereGeometry(0.32, 14, 14), lightGlowMaterial);
+    glow.position.set(post.position.x, post.position.y + 2.3, post.position.z);
+    scene.add(glow);
+  });
 }
 
 function addLegacyMapPlate() {
@@ -2799,6 +3383,7 @@ function initializeMultiplayerUi() {
   setMenuOpen(true);
   updateLobbyCounts();
   syncNetworkCard();
+  syncMatchPanel();
   refreshLobbySnapshot();
   window.setInterval(() => {
     refreshLobbySnapshot(true);
@@ -2807,7 +3392,9 @@ function initializeMultiplayerUi() {
 
 async function onLobbyButtonClick(event) {
   const lobbyId = event.currentTarget.dataset.lobbyId;
+  pendingAutoReadyAfterJoin = event.currentTarget.dataset.autoReady === "true";
   if (!LOBBY_IDS.includes(lobbyId)) {
+    pendingAutoReadyAfterJoin = false;
     return;
   }
 
@@ -2817,10 +3404,29 @@ async function onLobbyButtonClick(event) {
   try {
     await multiplayer.connect(lobbyId);
   } catch (error) {
+    pendingAutoReadyAfterJoin = false;
     setLobbyButtonsDisabled(false);
     updateLobbyMenuStatus("Det gick inte att ansluta till lobbyn just nu.");
     setMessage("Multiplayer-servern svarade inte. Kolla Worker-URL och försök igen.");
   }
+}
+
+function onReadyButtonClick() {
+  if (!multiplayerState.joined) {
+    return;
+  }
+
+  const nextReady = !state.localReady;
+  state.localReady = nextReady;
+  multiplayer.sendReady(nextReady);
+  const selfPlayer = multiplayerState.playerRoster.get(multiplayerState.selfId);
+  if (selfPlayer) {
+    upsertRosterPlayer({
+      ...selfPlayer,
+      ready: nextReady,
+    });
+  }
+  syncMatchPanel();
 }
 
 function setLobbyButtonsDisabled(disabled) {
@@ -2845,10 +3451,17 @@ function handleLobbySnapshot(payload) {
       continue;
     }
     multiplayerState.lobbyCounts[lobby.lobbyId] = lobby.playerCount ?? 0;
+    multiplayerState.lobbyStatus[lobby.lobbyId] = {
+      playerCount: lobby.playerCount ?? 0,
+      readyCount: lobby.readyCount ?? 0,
+      phase: lobby.phase ?? MATCH_PHASES.staging,
+      countdownEndsAt: lobby.countdownEndsAt ?? null,
+    };
   }
 
   updateLobbyCounts();
   syncNetworkCard();
+  syncMatchPanel();
 
   if (multiplayerState.menuOpen) {
     updateLobbyMenuStatus("Valj en lobby och klicka sedan i scenen for att lasa musen.");
@@ -2868,13 +3481,21 @@ function handleMultiplayerStateChange({ connectionState, lobbyId, reason }) {
   }
 
   if (connectionState === "disconnected") {
+    pendingAutoReadyAfterJoin = false;
     multiplayerState.joined = false;
     multiplayerState.selfId = null;
     multiplayerState.lobbyId = null;
+    multiplayerState.selfName = "";
     multiplayerState.localActionState = createActionState();
+    multiplayerState.matchState = createMatchState();
+    multiplayerState.playerRoster.clear();
     clearRemotePlayers();
     resetInputState();
+    state.localReady = false;
+    state.playerPhase = MATCH_PHASES.staging;
     syncNetworkCard();
+    syncMatchPanel();
+    renderLobbyPlayerList();
     setMenuOpen(true);
     setLobbyButtonsDisabled(false);
     if (document.pointerLockElement === canvas) {
@@ -2888,22 +3509,46 @@ function handleLobbyWelcome(message) {
   multiplayerState.joined = true;
   multiplayerState.selfId = message.selfId;
   multiplayerState.lobbyId = message.lobbyId;
+  multiplayerState.selfName = message.name;
+  multiplayerState.selfColor = message.color;
   multiplayerState.localActionState = createActionState();
   multiplayerState.lobbyCounts[message.lobbyId] = message.playerCount ?? 1;
   clearRemotePlayers();
+  resetRoundState();
 
   for (const player of message.players ?? []) {
+    upsertRosterPlayer(player);
     queueRemotePose(player.id, player, player.pose);
+  }
+
+  if (message.matchState) {
+    applyMatchStateMessage(message.matchState);
   }
 
   setMenuOpen(false);
   setLobbyButtonsDisabled(false);
   networkCardEl.classList.remove("hidden");
-  resetRound(true);
   syncNetworkCard();
+  syncMatchPanel();
   setMessage(
-    `Du ar i ${LOBBY_LABELS[message.lobbyId]}. Klicka i scenen for att lasa musen och spring runt med de andra.`,
+    pendingAutoReadyAfterJoin
+      ? `Du är i ${LOBBY_LABELS[message.lobbyId]}. Solo-läget är redo och countdown startar nu.`
+      : `Du är i ${LOBBY_LABELS[message.lobbyId]}. Vänta in de andra i staging-lobbyn och tryck Ready när du vill dra.`,
   );
+
+  if (pendingAutoReadyAfterJoin) {
+    pendingAutoReadyAfterJoin = false;
+    state.localReady = true;
+    multiplayer.sendReady(true);
+    const selfPlayer = multiplayerState.playerRoster.get(multiplayerState.selfId);
+    if (selfPlayer) {
+      upsertRosterPlayer({
+        ...selfPlayer,
+        ready: true,
+      });
+    }
+    syncMatchPanel();
+  }
 }
 
 function handleLobbyPresence(message) {
@@ -2919,13 +3564,199 @@ function handleLobbyPresence(message) {
   }
 
   if (message.action === "join") {
+    upsertRosterPlayer(message.player);
     queueRemotePose(message.player.id, message.player, message.player.pose);
+    syncMatchPanel();
     return;
   }
 
   if (message.action === "leave") {
+    removeRosterPlayer(message.player.id);
     removeRemotePlayer(message.player.id);
+    syncMatchPanel();
   }
+}
+
+function handleMatchStateMessage(message) {
+  applyMatchStateMessage(message);
+}
+
+function applyMatchStateMessage(message) {
+  const previousMatchState = multiplayerState.matchState;
+  multiplayerState.matchState = {
+    ...createMatchState(),
+    ...message,
+  };
+
+  if (multiplayerState.lobbyId && Number.isFinite(message.playerCount)) {
+    multiplayerState.lobbyCounts[multiplayerState.lobbyId] = message.playerCount;
+    multiplayerState.lobbyStatus[multiplayerState.lobbyId] = {
+      playerCount: message.playerCount,
+      readyCount: message.readyCount ?? 0,
+      phase: message.phase ?? MATCH_PHASES.staging,
+      countdownEndsAt: message.countdownEndsAt ?? null,
+    };
+  }
+
+  if (Array.isArray(message.players)) {
+    setRosterPlayers(message.players);
+  }
+
+  const localPlayer = multiplayerState.playerRoster.get(multiplayerState.selfId);
+  const desiredPlayerPhase =
+    localPlayer?.playerPhase ??
+    (message.phase === MATCH_PHASES.bus
+      ? MATCH_PHASES.bus
+      : message.phase === MATCH_PHASES.active
+        ? MATCH_PHASES.active
+        : MATCH_PHASES.staging);
+
+  if (
+    desiredPlayerPhase === MATCH_PHASES.bus &&
+    (state.playerPhase !== MATCH_PHASES.bus ||
+      previousMatchState.busStartedAt !== multiplayerState.matchState.busStartedAt)
+  ) {
+    enterLocalBusPhase(false);
+  } else if (desiredPlayerPhase === MATCH_PHASES.glide && state.playerPhase !== MATCH_PHASES.glide) {
+    enterLocalGlidePhase(false, false);
+  } else if (desiredPlayerPhase === MATCH_PHASES.active && state.playerPhase !== MATCH_PHASES.active) {
+    enterLocalActivePhase(false, state.playerPhase !== MATCH_PHASES.glide);
+  } else if (
+    desiredPlayerPhase !== MATCH_PHASES.bus &&
+    desiredPlayerPhase !== MATCH_PHASES.glide &&
+    desiredPlayerPhase !== MATCH_PHASES.active &&
+    state.playerPhase !== MATCH_PHASES.staging
+  ) {
+    enterLocalStagingPhase(false);
+  }
+
+  syncNetworkCard();
+  syncMatchPanel();
+}
+
+function resetRoundState() {
+  stopPoopHold();
+  clearProjectiles();
+  clearPoopRopes();
+  clearSplats();
+  clearImpactBursts();
+  multiplayerState.localActionState = createActionState();
+  state.moveAmount = 0;
+  state.walkCycle = 0;
+  state.cooldown = 0;
+  state.verticalVelocity = 0;
+  state.grounded = true;
+  state.hemorrhoids = 0;
+  state.score = 0;
+  state.hits = 0;
+  state.combo = 0;
+  state.gameOver = false;
+  state.resetTimer = 0;
+  state.isOnPhone = false;
+  state.poopAnimation = 0;
+  state.strikeAnimation = 0;
+  state.strikeResolved = true;
+  state.glideVelocity.set(0, 0, 0);
+  state.autoDropTriggered = false;
+  poopHoldState.pointerId = null;
+  poopHoldState.isPointerDown = false;
+  poopHoldState.holdTime = 0;
+  poopHoldState.started = false;
+  activePoopRope = null;
+  gameOverEl.classList.add("hidden");
+  updateHud();
+}
+
+function positionPlayerForPhase(phase, options = {}) {
+  const now = options.now ?? Date.now();
+  if (phase === MATCH_PHASES.bus) {
+    const seatPosition = getBusSeatWorldPosition(
+      multiplayerState.playerRoster.get(multiplayerState.selfId)?.guestIndex ?? 0,
+      now,
+      tempVecL,
+    );
+    const busYaw = getBusTransform(now).yaw;
+    state.playerPosition.copy(seatPosition);
+    state.playerYaw = busYaw;
+    state.cameraYaw = busYaw;
+    state.cameraPitch = -0.18;
+    hero.root.position.copy(state.playerPosition);
+    hero.root.rotation.y = state.playerYaw;
+    return;
+  }
+
+  const spawn = getSpawnForPhase(phase);
+  state.playerPosition.set(spawn.x, spawn.y, spawn.z);
+  state.playerYaw = spawn.yaw;
+  state.cameraYaw = spawn.yaw;
+  state.cameraPitch = phase === MATCH_PHASES.staging ? -0.1 : -0.2;
+  hero.root.position.copy(state.playerPosition);
+  hero.root.rotation.y = state.playerYaw;
+}
+
+function enterLocalStagingPhase(broadcast = true) {
+  resetRoundState();
+  state.playerPhase = MATCH_PHASES.staging;
+  positionPlayerForPhase(MATCH_PHASES.staging);
+  if (broadcast && multiplayerState.joined) {
+    multiplayer.sendPlayerState(MATCH_PHASES.staging);
+  }
+  syncMatchPanel();
+}
+
+function enterLocalBusPhase(broadcast = true) {
+  if (state.playerPhase !== MATCH_PHASES.bus) {
+    resetRoundState();
+  }
+  state.playerPhase = MATCH_PHASES.bus;
+  state.localReady = false;
+  positionPlayerForPhase(MATCH_PHASES.bus);
+  if (broadcast && multiplayerState.joined) {
+    multiplayer.sendPlayerState(MATCH_PHASES.bus);
+  }
+  syncMatchPanel();
+}
+
+function enterLocalGlidePhase(broadcast = true, isAutoDrop = false) {
+  const now = Date.now();
+  if (state.playerPhase === MATCH_PHASES.bus) {
+    positionPlayerForPhase(MATCH_PHASES.bus, { now });
+  }
+  state.playerPhase = MATCH_PHASES.glide;
+  state.grounded = false;
+  state.verticalVelocity = -glideConfig.fallSpeed;
+  state.glideVelocity.set(0, -glideConfig.fallSpeed, 0);
+  state.playerPosition.y = Math.max(state.playerPosition.y - 1.1, 10);
+  state.autoDropTriggered = isAutoDrop;
+  if (broadcast && multiplayerState.joined) {
+    multiplayer.sendPlayerState(MATCH_PHASES.glide);
+  }
+  syncMatchPanel();
+}
+
+function enterLocalActivePhase(broadcast = true, snapToIslandSpawn = false) {
+  if (snapToIslandSpawn || state.playerPhase === MATCH_PHASES.staging || state.playerPhase === MATCH_PHASES.bus) {
+    positionPlayerForPhase(MATCH_PHASES.active);
+  }
+  state.playerPhase = MATCH_PHASES.active;
+  state.grounded = true;
+  state.verticalVelocity = 0;
+  state.playerPosition.y = getSupportHeight(state.playerPosition);
+  hero.root.position.copy(state.playerPosition);
+  hero.root.rotation.y = state.playerYaw;
+  if (broadcast && multiplayerState.joined) {
+    multiplayer.sendPlayerState(MATCH_PHASES.active);
+  }
+  syncMatchPanel();
+}
+
+function canJumpFromBus(now = Date.now()) {
+  return (
+    Number.isFinite(multiplayerState.matchState.doorsOpenAt) &&
+    now >= multiplayerState.matchState.doorsOpenAt &&
+    (!Number.isFinite(multiplayerState.matchState.autoDropAt) ||
+      now < multiplayerState.matchState.autoDropAt)
+  );
 }
 
 function handleLobbyPose(message) {
@@ -2993,12 +3824,17 @@ function setMenuOpen(isOpen) {
   multiplayerState.menuOpen = isOpen;
   lobbyMenuEl.classList.toggle("hidden", !isOpen);
   document.body.classList.toggle("menu-open", isOpen);
+  syncMatchPanel();
 }
 
 function updateLobbyCounts() {
   for (const lobbyId of LOBBY_IDS) {
-    const count = multiplayerState.lobbyCounts[lobbyId] ?? 0;
-    const label = `${count} / ${MAX_PLAYERS_PER_LOBBY} spelare`;
+    const snapshot = multiplayerState.lobbyStatus[lobbyId] ?? {
+      playerCount: multiplayerState.lobbyCounts[lobbyId] ?? 0,
+      readyCount: 0,
+      phase: MATCH_PHASES.staging,
+    };
+    const label = `${snapshot.playerCount} / ${MAX_PLAYERS_PER_LOBBY} spelare · ${getMatchPhaseLabel(snapshot.phase)}`;
     if (lobbyCountEls[lobbyId]) {
       lobbyCountEls[lobbyId].textContent = label;
     }
@@ -3016,7 +3852,11 @@ function syncNetworkCard() {
 
   networkCardEl.classList.remove("hidden");
   networkLobbyNameEl.textContent = LOBBY_LABELS[lobbyId];
-  networkStatusTextEl.textContent = `${multiplayerState.lobbyCounts[lobbyId] ?? 0} / ${MAX_PLAYERS_PER_LOBBY} spelare online`;
+  networkStatusTextEl.textContent = `${
+    multiplayerState.lobbyCounts[lobbyId] ?? 0
+  } / ${MAX_PLAYERS_PER_LOBBY} online · ${
+    multiplayerState.matchState.readyCount ?? 0
+  } ready · ${getMatchPhaseLabel(multiplayerState.matchState.phase ?? MATCH_PHASES.staging)}`;
 }
 
 function resetInputState() {
@@ -3076,6 +3916,12 @@ function ensureRemotePlayer(playerId, playerMeta = null) {
         ...playerMeta.actionState,
       };
     }
+    if (playerMeta?.playerPhase) {
+      remotePlayer.playerPhase = playerMeta.playerPhase;
+    }
+    if (Number.isFinite(playerMeta?.guestIndex)) {
+      remotePlayer.guestIndex = playerMeta.guestIndex;
+    }
     return remotePlayer;
   }
 
@@ -3094,6 +3940,9 @@ function ensureRemotePlayer(playerId, playerMeta = null) {
     renderPose: null,
     rope: null,
     strikeTimer: 0,
+    ready: Boolean(playerMeta?.ready),
+    playerPhase: playerMeta?.playerPhase ?? MATCH_PHASES.staging,
+    guestIndex: playerMeta?.guestIndex ?? 0,
   };
   multiplayerState.remotePlayers.set(playerId, remotePlayer);
   if (remotePlayer.actionState.poopActive) {
@@ -3116,10 +3965,10 @@ function queueRemotePose(playerId, playerMeta, pose) {
   const sample = {
     time: performance.now(),
     pose: {
-      x: pose?.x ?? PLAYER_SPAWN.x,
-      y: pose?.y ?? PLAYER_SPAWN.y,
-      z: pose?.z ?? PLAYER_SPAWN.z,
-      yaw: pose?.yaw ?? PLAYER_SPAWN.yaw,
+      x: pose?.x ?? getSpawnForPhase(remotePlayer.playerPhase).x,
+      y: pose?.y ?? getSpawnForPhase(remotePlayer.playerPhase).y,
+      z: pose?.z ?? getSpawnForPhase(remotePlayer.playerPhase).z,
+      yaw: pose?.yaw ?? getSpawnForPhase(remotePlayer.playerPhase).yaw,
       moveAmount: pose?.moveAmount ?? 0,
     },
   };
@@ -3199,6 +4048,30 @@ function stopRemotePoopRope(remotePlayer) {
 
 function updateRemotePlayers(delta, now) {
   for (const remotePlayer of multiplayerState.remotePlayers.values()) {
+    const rosterPlayer = multiplayerState.playerRoster.get(remotePlayer.id);
+    if (rosterPlayer) {
+      remotePlayer.ready = Boolean(rosterPlayer.ready);
+      remotePlayer.playerPhase = rosterPlayer.playerPhase ?? remotePlayer.playerPhase;
+      remotePlayer.guestIndex = rosterPlayer.guestIndex ?? remotePlayer.guestIndex;
+    }
+
+    if (remotePlayer.playerPhase === MATCH_PHASES.bus) {
+      remotePlayer.avatar.root.visible = false;
+      const busPosition = getBusSeatWorldPosition(remotePlayer.guestIndex, Date.now(), tempVecO);
+      remotePlayer.renderPose = {
+        x: busPosition.x,
+        y: busPosition.y,
+        z: busPosition.z,
+        yaw: getBusTransform(Date.now()).yaw,
+        moveAmount: 0,
+      };
+      updateRemotePlayerAvatar(remotePlayer.avatar, remotePlayer.renderPose, delta);
+      stopRemotePoopRope(remotePlayer);
+      continue;
+    }
+
+    remotePlayer.avatar.root.visible = true;
+
     if (remotePlayer.actionState.poopActive && !remotePlayer.rope) {
       ensureRemotePoopRope(remotePlayer);
     }
@@ -3279,37 +4152,15 @@ function lerpAngle(from, to, amount) {
 }
 
 function resetRound(initial = false) {
-  stopPoopHold();
-  clearProjectiles();
-  clearPoopRopes();
-  clearSplats();
-  clearImpactBursts();
-  multiplayerState.localActionState = createActionState();
-
-  state.playerPosition.set(PLAYER_SPAWN.x, PLAYER_SPAWN.y, PLAYER_SPAWN.z);
-  state.playerYaw = PLAYER_SPAWN.yaw;
-  state.cameraYaw = PLAYER_SPAWN.yaw;
-  state.cameraPitch = -0.2;
-  state.moveAmount = 0;
-  state.walkCycle = 0;
-  state.cooldown = 0;
-  state.verticalVelocity = 0;
-  state.grounded = true;
-  state.hemorrhoids = 0;
-  state.score = 0;
-  state.hits = 0;
-  state.combo = 0;
-  state.gameOver = false;
-  state.resetTimer = 0;
-  state.isOnPhone = false;
-  state.poopAnimation = 0;
-  state.strikeAnimation = 0;
-  state.strikeResolved = true;
-  poopHoldState.pointerId = null;
-  poopHoldState.isPointerDown = false;
-  poopHoldState.holdTime = 0;
-  poopHoldState.started = false;
-  activePoopRope = null;
+  resetRoundState();
+  if (!multiplayerState.joined) {
+    state.playerPhase = MATCH_PHASES.staging;
+    positionPlayerForPhase(MATCH_PHASES.active);
+  } else if (multiplayerState.matchState.phase === MATCH_PHASES.staging || multiplayerState.matchState.phase === MATCH_PHASES.countdown) {
+    enterLocalStagingPhase(false);
+  } else {
+    enterLocalActivePhase(false, true);
+  }
   standingTarget.state.floatTime = Math.random() * Math.PI * 2;
   standingTarget.state.wobble = 0;
   standingTarget.state.wobbleVelocity = 0;
@@ -3322,14 +4173,13 @@ function resetRound(initial = false) {
   hero.root.position.copy(state.playerPosition);
   hero.root.rotation.y = state.playerYaw;
 
-  gameOverEl.classList.add("hidden");
   updateHud();
   setMessage(
     !multiplayerState.joined
       ? "Valj en lobby i menyn for att ga in i multiplayerlaget."
       : initial
-        ? "Klicka i scenen for att lasa musen. Hall vanster mus nere pa telefonen for att borja bajsa, och tryck F om gubben i oknen behover stryk."
-        : "Ny runda. Hall vanster mus nere pa telefonen for att bygga en korv, och kliv av direkt om du vill bryta.",
+        ? "Klicka i scenen for att lasa musen. Tryck Ready i staging-lobbyn nar du vill att matchen ska dra igang."
+        : "Ny runda. Glid ner pa on och borja sedan med det vanliga kaoset.",
   );
 }
 
@@ -3358,13 +4208,18 @@ function onKeyDown(event) {
   }
   if (event.code === "Space") {
     event.preventDefault();
-    if (!state.gameOver && state.grounded) {
+    if (state.playerPhase === MATCH_PHASES.bus) {
+      if (canJumpFromBus()) {
+        enterLocalGlidePhase(true, false);
+      }
+      return;
+    }
+    if (state.playerPhase === MATCH_PHASES.active && !state.gameOver && state.grounded) {
       state.verticalVelocity = heroMetrics.jumpVelocity;
       state.grounded = false;
-      setMessage("Hoppla.");
     }
   }
-  if (event.code === "KeyF") {
+  if (event.code === "KeyF" && state.playerPhase === MATCH_PHASES.active) {
     performStrike();
   }
   if (event.code === "KeyR" && state.gameOver) {
@@ -3421,6 +4276,17 @@ function onPointerDown(event) {
 
   if (!isPointerLocked()) {
     canvas.requestPointerLock();
+    return;
+  }
+
+  if (state.playerPhase !== MATCH_PHASES.active) {
+    if (state.playerPhase === MATCH_PHASES.staging) {
+      setMessage("Du är i staging-lobbyn. Tryck Ready och vänta på battle bussen.");
+    } else if (state.playerPhase === MATCH_PHASES.bus) {
+      setMessage("Håll i dig. Space används för att hoppa när dörrarna öppnas.");
+    } else if (state.playerPhase === MATCH_PHASES.glide) {
+      setMessage("Ingen bajsning i luften. Segla ner och landa först.");
+    }
     return;
   }
 
@@ -3541,7 +4407,7 @@ function updatePoopHold(delta) {
     return;
   }
 
-  if (state.gameOver || !isPointerLocked()) {
+  if (state.gameOver || state.playerPhase !== MATCH_PHASES.active || !isPointerLocked()) {
     stopPoopHold();
     return;
   }
@@ -3698,6 +4564,8 @@ function getMoveIntent() {
 }
 
 function updatePlayer(delta) {
+  hero.root.visible = state.playerPhase !== MATCH_PHASES.bus;
+
   if (activePoopRope) {
     state.poopAnimation = Math.min(0.34, state.poopAnimation + delta * 1.8);
   } else {
@@ -3713,52 +4581,133 @@ function updatePlayer(delta) {
   const isMoving = moveIntent.lengthSq() > 0;
   const speed = heroMetrics.moveSpeed;
 
-  if (isMoving) {
-    state.moveAmount = THREE.MathUtils.lerp(state.moveAmount, 1, 1 - Math.exp(-delta * 10));
-    state.walkCycle += delta * 10.5;
-    state.playerYaw = dampAngle(state.playerYaw, Math.atan2(moveIntent.x, moveIntent.z), delta * 14);
+  if (state.playerPhase === MATCH_PHASES.bus) {
+    const busNow = Date.now();
+    positionPlayerForPhase(MATCH_PHASES.bus, { now: busNow });
+    state.moveAmount = THREE.MathUtils.lerp(state.moveAmount, 0, 1 - Math.exp(-delta * 8));
+    state.walkCycle += delta * 2.2;
+    state.grounded = false;
+    state.isOnPhone = false;
 
-    const nextPosition = tempVecG.copy(state.playerPosition).addScaledVector(moveIntent, speed * delta);
-    keepInsideArena(nextPosition);
-    if (state.playerPosition.y < getPhoneTopY() + heroMetrics.phoneCollisionHeight) {
-      resolvePhoneCollision(nextPosition);
+    if (
+      !state.autoDropTriggered &&
+      Number.isFinite(multiplayerState.matchState.autoDropAt) &&
+      busNow >= multiplayerState.matchState.autoDropAt
+    ) {
+      enterLocalGlidePhase(true, true);
+      setMessage("Bussen hann till slutet av ön. Du blev automatiskt avhoppad.");
     }
-    if (state.playerPosition.y < heroMetrics.worldCollisionHeight) {
-      resolveWorldCollisions(nextPosition);
-    }
-    keepInsideArena(nextPosition);
-    state.playerPosition.copy(nextPosition);
-  } else {
-    state.moveAmount = THREE.MathUtils.lerp(state.moveAmount, 0, 1 - Math.exp(-delta * 9));
   }
 
-  if (!state.grounded) {
-    state.verticalVelocity -= 19.5 * delta;
+  if (state.playerPhase === MATCH_PHASES.glide) {
+    stopPoopHold();
+    state.isOnPhone = false;
+    state.grounded = false;
+    state.verticalVelocity = -glideConfig.fallSpeed;
+
+    if (isMoving) {
+      state.moveAmount = THREE.MathUtils.lerp(state.moveAmount, 0.7, 1 - Math.exp(-delta * 7));
+      state.walkCycle += delta * 6.4;
+      state.playerYaw = dampAngle(state.playerYaw, Math.atan2(moveIntent.x, moveIntent.z), delta * glideConfig.turnSpeed);
+      state.glideVelocity.x = THREE.MathUtils.lerp(
+        state.glideVelocity.x,
+        moveIntent.x * glideConfig.airSpeed,
+        1 - Math.exp(-delta * 7),
+      );
+      state.glideVelocity.z = THREE.MathUtils.lerp(
+        state.glideVelocity.z,
+        moveIntent.z * glideConfig.airSpeed,
+        1 - Math.exp(-delta * 7),
+      );
+    } else {
+      state.moveAmount = THREE.MathUtils.lerp(state.moveAmount, 0.18, 1 - Math.exp(-delta * 4));
+      state.glideVelocity.x = THREE.MathUtils.lerp(state.glideVelocity.x, 0, 1 - Math.exp(-delta * 4));
+      state.glideVelocity.z = THREE.MathUtils.lerp(state.glideVelocity.z, 0, 1 - Math.exp(-delta * 4));
+    }
+
+    state.playerPosition.x += state.glideVelocity.x * delta;
+    state.playerPosition.z += state.glideVelocity.z * delta;
     state.playerPosition.y += state.verticalVelocity * delta;
+    keepInsideArena(state.playerPosition);
+
     const supportHeight = getSupportHeight(state.playerPosition);
-    if (state.playerPosition.y <= supportHeight) {
+    if (state.playerPosition.y <= supportHeight + glideConfig.landingThreshold) {
       state.playerPosition.y = supportHeight;
-      state.verticalVelocity = 0;
-      state.grounded = true;
+      enterLocalActivePhase(true, false);
+      setMessage("Landa snyggt. Nu är du live på ön.");
     }
-  }
+  } else if (state.playerPhase === MATCH_PHASES.staging) {
+    stopPoopHold();
+    if (isMoving) {
+      state.moveAmount = THREE.MathUtils.lerp(state.moveAmount, 1, 1 - Math.exp(-delta * 10));
+      state.walkCycle += delta * 9.6;
+      state.playerYaw = dampAngle(state.playerYaw, Math.atan2(moveIntent.x, moveIntent.z), delta * 12);
+      const nextPosition = tempVecG.copy(state.playerPosition).addScaledVector(moveIntent, speed * delta * 0.78);
+      keepInsideStagingPlatform(nextPosition);
+      state.playerPosition.copy(nextPosition);
+    } else {
+      state.moveAmount = THREE.MathUtils.lerp(state.moveAmount, 0, 1 - Math.exp(-delta * 8));
+    }
+    state.grounded = true;
+    state.playerPosition.y = stagingPlatform.height;
+    state.isOnPhone = false;
+  } else if (state.playerPhase === MATCH_PHASES.active) {
+    if (isMoving) {
+      state.moveAmount = THREE.MathUtils.lerp(state.moveAmount, 1, 1 - Math.exp(-delta * 10));
+      state.walkCycle += delta * 10.5;
+      state.playerYaw = dampAngle(state.playerYaw, Math.atan2(moveIntent.x, moveIntent.z), delta * 14);
 
-  if (state.grounded) {
-    state.playerPosition.y = getSupportHeight(state.playerPosition);
-  }
+      const nextPosition = tempVecG.copy(state.playerPosition).addScaledVector(moveIntent, speed * delta);
+      keepInsideArena(nextPosition);
+      if (state.playerPosition.y < getPhoneTopY() + heroMetrics.phoneCollisionHeight) {
+        resolvePhoneCollision(nextPosition);
+      }
+      if (state.playerPosition.y < heroMetrics.worldCollisionHeight) {
+        resolveWorldCollisions(nextPosition);
+      }
+      keepInsideArena(nextPosition);
+      state.playerPosition.copy(nextPosition);
+    } else {
+      state.moveAmount = THREE.MathUtils.lerp(state.moveAmount, 0, 1 - Math.exp(-delta * 9));
+    }
 
-  state.isOnPhone = state.grounded && isStandingOnPhone(state.playerPosition);
+    if (!state.grounded) {
+      state.verticalVelocity -= 19.5 * delta;
+      state.playerPosition.y += state.verticalVelocity * delta;
+      const supportHeight = getSupportHeight(state.playerPosition);
+      if (state.playerPosition.y <= supportHeight) {
+        state.playerPosition.y = supportHeight;
+        state.verticalVelocity = 0;
+        state.grounded = true;
+      }
+    }
+
+    if (state.grounded) {
+      state.playerPosition.y = getSupportHeight(state.playerPosition);
+    }
+
+    state.isOnPhone = state.grounded && isStandingOnPhone(state.playerPosition);
+  }
 
   hero.root.position.copy(state.playerPosition);
   hero.root.rotation.y = state.playerYaw;
 
   const walkSwing = Math.sin(state.walkCycle) * state.moveAmount;
   const counterSwing = Math.sin(state.walkCycle + Math.PI) * state.moveAmount;
-  const jumpLean = state.grounded ? 0 : Math.min(0.28, Math.max(-0.18, state.verticalVelocity * 0.04));
+  const jumpLean =
+    state.playerPhase === MATCH_PHASES.glide
+      ? 0.22
+      : state.grounded
+        ? 0
+        : Math.min(0.28, Math.max(-0.18, state.verticalVelocity * 0.04));
   const poopPose =
-    state.poopAnimation > 0 ? Math.sin((1 - state.poopAnimation / 0.34) * Math.PI) : 0;
+    state.playerPhase === MATCH_PHASES.active && state.poopAnimation > 0
+      ? Math.sin((1 - state.poopAnimation / 0.34) * Math.PI)
+      : 0;
   const strikeProgress =
-    state.strikeAnimation > 0 ? 1 - state.strikeAnimation / strikeConfig.duration : 0;
+    state.playerPhase === MATCH_PHASES.active && state.strikeAnimation > 0
+      ? 1 - state.strikeAnimation / strikeConfig.duration
+      : 0;
   const strikePose = state.strikeAnimation > 0 ? Math.sin(strikeProgress * Math.PI) : 0;
   const strikeTwist = state.strikeAnimation > 0 ? Math.sin(strikeProgress * Math.PI * 0.9) : 0;
 
@@ -3776,6 +4725,40 @@ function updatePlayer(delta) {
     poopPose * 0.08;
   hero.headPivot.rotation.y = Math.sin(clock.elapsedTime * 0.8) * 0.1 + strikeTwist * 0.18;
   hero.headPivot.rotation.x = -0.05 + Math.cos(clock.elapsedTime * 1.4) * 0.02 - poopPose * 0.04;
+
+  if (state.playerPhase === MATCH_PHASES.bus) {
+    hero.leftArm.rotation.x = -0.72;
+    hero.rightArm.rotation.x = -0.72;
+    hero.leftArm.rotation.z = 0.14;
+    hero.rightArm.rotation.z = -0.14;
+    hero.leftLeg.rotation.x = 0.34;
+    hero.rightLeg.rotation.x = 0.34;
+    hero.torso.rotation.x = -0.1;
+    hero.torso.position.y = state.playerPosition.y * 0.08 + Math.sin(clock.elapsedTime * 3) * 0.02;
+  } else if (state.playerPhase === MATCH_PHASES.glide) {
+    hero.leftArm.rotation.x = -1.22;
+    hero.rightArm.rotation.x = -1.22;
+    hero.leftArm.rotation.z = 0.58;
+    hero.rightArm.rotation.z = -0.58;
+    hero.leftLeg.rotation.x = 0.16;
+    hero.rightLeg.rotation.x = 0.16;
+    hero.torso.rotation.x = -0.22;
+    hero.torso.position.y = state.playerPosition.y * 0.08;
+  }
+}
+
+function keepInsideStagingPlatform(position) {
+  position.x = THREE.MathUtils.clamp(
+    position.x,
+    stagingPlatform.center.x - stagingPlatform.halfX + 0.75,
+    stagingPlatform.center.x + stagingPlatform.halfX - 0.75,
+  );
+  position.z = THREE.MathUtils.clamp(
+    position.z,
+    stagingPlatform.center.z - stagingPlatform.halfZ + 0.75,
+    stagingPlatform.center.z + stagingPlatform.halfZ - 0.75,
+  );
+  position.y = stagingPlatform.height;
 }
 
 function keepInsideArena(position) {
@@ -3877,6 +4860,23 @@ function updateCamera(delta) {
     return;
   }
 
+  if (state.playerPhase === MATCH_PHASES.bus) {
+    const transform = getBusTransform(Date.now());
+    const right = tempVecA.set(-transform.direction.z, 0, transform.direction.x).normalize();
+    const desiredPosition = tempVecB
+      .copy(transform.position)
+      .addScaledVector(transform.direction, -7.8)
+      .addScaledVector(right, 3.2)
+      .add(tempVecC.set(0, 2.9, 0));
+    const lookAt = tempVecD
+      .copy(transform.position)
+      .addScaledVector(transform.direction, busConfig.lookAhead)
+      .add(tempVecE.set(0, 0.8, 0));
+    camera.position.lerp(desiredPosition, 1 - Math.exp(-delta * 4.8));
+    camera.lookAt(lookAt);
+    return;
+  }
+
   const flatForward = tempVecI.set(
     Math.sin(state.cameraYaw),
     0,
@@ -3891,10 +4891,25 @@ function updateCamera(delta) {
   const anchor = tempVecL.copy(state.playerPosition).add(tempVecA.set(0, heroMetrics.cameraAnchorHeight, 0));
   const desiredPosition = tempVecB
     .copy(anchor)
-    .addScaledVector(flatForward, -heroMetrics.cameraDistance)
+    .addScaledVector(
+      flatForward,
+      state.playerPhase === MATCH_PHASES.glide ? -(heroMetrics.cameraDistance + 1.8) : -heroMetrics.cameraDistance,
+    )
     .addScaledVector(cameraRight, heroMetrics.cameraSide)
-    .add(tempVecC.set(0, heroMetrics.cameraLift - state.cameraPitch * 0.9, 0));
-  const lookAt = tempVecD.copy(anchor).addScaledVector(lookDirection, heroMetrics.cameraLookDistance);
+    .add(
+      tempVecC.set(
+        0,
+        (state.playerPhase === MATCH_PHASES.glide ? heroMetrics.cameraLift + 1.1 : heroMetrics.cameraLift) -
+          state.cameraPitch * 0.9,
+        0,
+      ),
+    );
+  const lookAt = tempVecD
+    .copy(anchor)
+    .addScaledVector(
+      lookDirection,
+      state.playerPhase === MATCH_PHASES.glide ? heroMetrics.cameraLookDistance + 4 : heroMetrics.cameraLookDistance,
+    );
 
   camera.position.lerp(desiredPosition, 1 - Math.exp(-delta * 13));
   camera.lookAt(lookAt);
@@ -3958,6 +4973,11 @@ function updateStandingTarget(delta) {
 }
 
 function updateAimMarker() {
+  if (state.playerPhase !== MATCH_PHASES.active) {
+    aimMarker.visible = false;
+    return;
+  }
+
   const { ring, dot } = aimMarker.userData;
   tempVecA.copy(getTargetAimPosition()).sub(state.playerPosition);
   const distance = tempVecA.length();
@@ -4534,6 +5554,13 @@ function updateHemorrhoids(delta) {
     return;
   }
 
+  if (state.playerPhase !== MATCH_PHASES.active) {
+    dangerRing.userData.fill.material.opacity = 0.18;
+    dangerRing.userData.outline.material.emissiveIntensity = 0.62;
+    dangerRing.scale.setScalar(1);
+    return;
+  }
+
   tempVecA.copy(state.playerPosition).setY(0);
   tempVecB.copy(world.phoneCenter).setY(0);
   const distanceToPhone = tempVecA.distanceTo(tempVecB);
@@ -4684,9 +5711,9 @@ function updateHud() {
 }
 
 function setMessage(text) {
-  state.message = text;
+  state.message = "";
   if (messageEl) {
-    messageEl.textContent = text;
+    messageEl.textContent = "";
   }
 }
 
@@ -4811,6 +5838,7 @@ function animate() {
 
   const delta = Math.min(clock.getDelta(), 0.033);
   const now = performance.now();
+  const nowDate = Date.now();
   if (state.cooldown > 0) {
     state.cooldown = Math.max(0, state.cooldown - delta);
   }
@@ -4828,6 +5856,9 @@ function animate() {
   updateSmoke(delta);
   updateImpactBursts(delta);
   updateHemorrhoids(delta);
+  updateBattleBusVisual(nowDate);
+  syncAnnouncementPrompts(nowDate);
+  syncMatchPanel(nowDate);
   updateHud();
 
   renderer.render(scene, camera);
