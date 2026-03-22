@@ -13,16 +13,29 @@ import {
   ACTION_KINDS,
   ARENA_RADIUS,
   BUS_ROUTE,
+  COMBAT_EVENT_KINDS,
+  GROUND_LOOT_PICKUP_RANGE,
+  INTERACT_KINDS,
   MATCH_PHASES,
   LOBBY_IDS,
   LOBBY_LABELS,
   MAX_PLAYERS_PER_LOBBY,
   MIN_PLAYERS_TO_START,
   PLAYER_SPAWN,
+  TOILET_INTERACT_RANGE,
+  TOILET_SEARCH_DURATION_MS,
+  TOILET_SPAWNS,
   REMOTE_INTERPOLATION_BACKTIME_MS,
   STAGING_SPAWN,
+  WEAPON_DEFINITIONS,
+  WEAPON_RARITIES,
+  WEAPON_RARITY_COLORS,
+  WEAPON_SLOT_COUNT,
+  WEAPON_TYPE_LABELS,
+  WEAPON_TYPES,
   WORLD_EVENT_KINDS,
   createActionState,
+  createEmptyLoadout,
   createMatchState,
   getSpawnForPhase,
   sanitizePlayerName,
@@ -37,6 +50,16 @@ const leaderboardHeadCache = new Map();
 const meterTextEl = document.querySelector("#meter-text");
 const meterFillEl = document.querySelector("#meter-fill");
 const gameOverEl = document.querySelector("#game-over");
+const interactPromptEl = document.querySelector("#interact-prompt");
+const interactTitleEl = document.querySelector("#interact-title");
+const interactSubtitleEl = document.querySelector("#interact-subtitle");
+const interactFillEl = document.querySelector("#interact-fill");
+const inventoryHudEl = document.querySelector("#inventory-hud");
+const inventorySlotEls = Array.from(document.querySelectorAll(".inventory-slot"));
+const hitmarkerEl = document.querySelector("#hitmarker");
+const lootToastEl = document.querySelector("#loot-toast");
+const lootToastRarityEl = document.querySelector("#loot-toast-rarity");
+const lootToastNameEl = document.querySelector("#loot-toast-name");
 const lobbyMenuEl = document.querySelector("#lobby-menu");
 const lobbyMenuStatusEl = document.querySelector("#lobby-menu-status");
 const profileToggleBtn = document.querySelector("#profile-toggle-btn");
@@ -231,6 +254,9 @@ const tempVecP = new THREE.Vector3();
 const tempVecQ = new THREE.Vector3();
 const tempVecR = new THREE.Vector3();
 const tempVecS = new THREE.Vector3();
+const tempVecT = new THREE.Vector3();
+const tempVecU = new THREE.Vector3();
+const tempVecV = new THREE.Vector3();
 const cameraCenterRay = new THREE.Vector2(0, 0);
 const aimPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -0.2);
 const phoneAimCenter = new THREE.Vector3();
@@ -260,6 +286,12 @@ const phoneMetrics = {
 };
 const standingTargetMetrics = {
   swayBaseY: 1.88,
+};
+const weaponVisualConfig = {
+  tracerLife: 0.08,
+  muzzleLife: 0.05,
+  hitmarkerLife: 0.12,
+  toastLife: 1.1,
 };
 
 const poopConfig = {
@@ -294,6 +326,11 @@ const handStrikeConfig = {
   playerConeRadians: 1.45,
   impactSpeed: 16,
 };
+const weaponIconByType = Object.freeze({
+  [WEAPON_TYPES.assaultRifle]: "AR",
+  [WEAPON_TYPES.shotgun]: "P",
+  [WEAPON_TYPES.smg]: "SMG",
+});
 const standingTargetPosition = new THREE.Vector3(36.4, 0, -1.8);
 
 const world = {
@@ -373,6 +410,35 @@ const state = {
   autoDropTriggered: false,
 };
 
+const interactState = {
+  keyDown: false,
+  localSearchToiletId: null,
+  progress: 0,
+  pressBuffer: 0,
+};
+
+const weaponState = {
+  slots: createEmptyLoadout(),
+  equippedSlot: 0,
+  pointerDown: false,
+  triggerReleased: true,
+  recoilKick: 0,
+  recoilYaw: 0,
+  crosshairBloom: 0,
+  muzzleTimer: 0,
+  hitmarkerTimer: 0,
+  toastTimer: 0,
+  currentToast: null,
+  tracerBeams: [],
+  localFireCooldown: 0,
+  nextSeed: 1,
+};
+
+const lootState = {
+  toilets: new Map(),
+  groundLoot: new Map(),
+};
+
 const projectiles = [];
 const poopRopes = [];
 const splats = [];
@@ -406,16 +472,25 @@ const aimMarker = createAimMarker();
 const dangerRing = createDangerRing();
 const standingTarget = createStandingTarget();
 const hero = buildHero();
+const weaponRoot = new THREE.Group();
+const toiletsRoot = new THREE.Group();
+const groundLootRoot = new THREE.Group();
 const remotePlayersRoot = new THREE.Group();
 const battleBus = createBattleBusRig();
+const toiletAsset = {
+  model: null,
+};
 
 scene.add(phoneRig);
 scene.add(aimMarker);
 scene.add(dangerRing);
 scene.add(standingTarget.root);
 scene.add(hero.root);
+scene.add(toiletsRoot);
+scene.add(groundLootRoot);
 scene.add(remotePlayersRoot);
 scene.add(battleBus.group);
+hero.weaponAnchor.add(weaponRoot);
 
 const multiplayerState = {
   selfId: null,
@@ -460,6 +535,10 @@ const multiplayer = new MultiplayerClient({
   onMatchState: handleMatchStateMessage,
   onPose: handleLobbyPose,
   onAction: handleLobbyAction,
+  onLootState: handleLootStateMessage,
+  onLootEvent: handleLootEventMessage,
+  onLoadoutState: handleLoadoutStateMessage,
+  onCombatEvent: handleCombatEventMessage,
   onWorldEvent: handleLobbyWorldEvent,
   onError: handleMultiplayerError,
 });
@@ -475,6 +554,7 @@ resetRound(true);
 window.addEventListener("resize", onResize);
 window.addEventListener("keydown", onKeyDown);
 window.addEventListener("keyup", onKeyUp);
+window.addEventListener("wheel", onMouseWheel, { passive: false });
 window.addEventListener("pointerlockchange", onPointerLockChange);
 window.addEventListener("pointerlockerror", onPointerLockError);
 window.addEventListener("pointerup", onPointerUp);
@@ -490,6 +570,9 @@ joinButtons.forEach((button) => {
 if (readyBtn) {
   readyBtn.addEventListener("click", onReadyButtonClick);
 }
+inventorySlotEls.forEach((button) => {
+  button.addEventListener("click", onInventorySlotClick);
+});
 if (profileToggleBtn) {
   profileToggleBtn.addEventListener("click", () => {
     profileEditorEl?.classList.remove("hidden");
@@ -533,6 +616,7 @@ if (profileResetSkinBtn) {
 
 initializeMultiplayerUi();
 loadBattleBusModel();
+loadToiletModel();
 
 setTimeout(() => {
   if (!playerProfile.name) {
@@ -688,6 +772,388 @@ function loadBattleBusModel() {
   );
 }
 
+function getWeaponDisplayName(type) {
+  return WEAPON_TYPE_LABELS[type] ?? "VAPEN";
+}
+
+function getWeaponRarityLabel(rarity) {
+  if (rarity === WEAPON_RARITIES.green) {
+    return "GREEN";
+  }
+  if (rarity === WEAPON_RARITIES.blue) {
+    return "BLUE";
+  }
+  if (rarity === WEAPON_RARITIES.purple) {
+    return "PURPLE";
+  }
+  return "GRAY";
+}
+
+function getCurrentWeapon() {
+  return weaponState.slots[weaponState.equippedSlot] ?? null;
+}
+
+function createWeaponPlaceholderMesh(type, rarity, { held = false, world = false } = {}) {
+  const accentColor = WEAPON_RARITY_COLORS[rarity] ?? "#8b939d";
+  const accent = new THREE.Color(accentColor);
+  const bodyMaterial = new THREE.MeshStandardMaterial({
+    color: held ? 0x3b3f47 : 0x2f333a,
+    roughness: 0.52,
+    metalness: 0.34,
+  });
+  const detailMaterial = new THREE.MeshStandardMaterial({
+    color: accent,
+    emissive: accent.clone().multiplyScalar(world ? 0.3 : 0.14),
+    emissiveIntensity: world ? 0.9 : 0.38,
+    roughness: 0.38,
+    metalness: 0.16,
+  });
+  const darkMaterial = new THREE.MeshStandardMaterial({
+    color: 0x171a20,
+    roughness: 0.76,
+    metalness: 0.1,
+  });
+
+  const group = new THREE.Group();
+  group.userData.weaponType = type;
+  const barrelLength =
+    type === WEAPON_TYPES.assaultRifle ? 0.72 : type === WEAPON_TYPES.shotgun ? 0.58 : 0.52;
+  const stockLength =
+    type === WEAPON_TYPES.assaultRifle ? 0.38 : type === WEAPON_TYPES.shotgun ? 0.44 : 0.28;
+  const mainBody = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.18, 0.16), bodyMaterial);
+  const barrel = new THREE.Mesh(new THREE.BoxGeometry(barrelLength, 0.08, 0.08), darkMaterial);
+  const stock = new THREE.Mesh(new THREE.BoxGeometry(stockLength, 0.16, 0.14), bodyMaterial);
+  const grip = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.24, 0.1), darkMaterial);
+  const accentStrip = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.05, 0.18), detailMaterial);
+
+  mainBody.position.set(0.1, 0, 0);
+  barrel.position.set(0.45 + barrelLength * 0.5, 0.01, 0);
+  stock.position.set(-0.25 - stockLength * 0.5, -0.01, 0);
+  grip.position.set(0.02, -0.19, 0);
+  accentStrip.position.set(0.06, 0.12, 0);
+  group.add(mainBody, barrel, stock, grip, accentStrip);
+
+  if (type === WEAPON_TYPES.shotgun) {
+    const pump = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.1, 0.12), detailMaterial);
+    pump.position.set(0.38, -0.08, 0);
+    group.add(pump);
+  } else if (type === WEAPON_TYPES.assaultRifle) {
+    const mag = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.26, 0.09), bodyMaterial);
+    mag.position.set(0.08, -0.22, -0.01);
+    mag.rotation.z = 0.22;
+    group.add(mag);
+  } else if (type === WEAPON_TYPES.smg) {
+    const muzzle = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.12, 0.12), detailMaterial);
+    muzzle.position.set(0.68, 0.01, 0);
+    group.add(muzzle);
+  }
+
+  const scale = held ? 0.5 : 0.9;
+  group.scale.setScalar(scale);
+  if (held) {
+    group.rotation.set(0.08, Math.PI, -0.08);
+    group.position.set(0.16, -0.02, -0.08);
+
+    const muzzleFlash = new THREE.Mesh(
+      new THREE.ConeGeometry(0.1, 0.26, 10),
+      new THREE.MeshBasicMaterial({
+        color: accent,
+        transparent: true,
+        opacity: 0,
+      }),
+    );
+    muzzleFlash.name = "muzzleFlash";
+    muzzleFlash.position.set(barrel.position.x + barrelLength * 0.5 + 0.08, 0.01, 0);
+    muzzleFlash.rotation.z = -Math.PI / 2;
+    muzzleFlash.visible = false;
+    group.add(muzzleFlash);
+  }
+
+  if (world) {
+    const glow = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.28, 0.38, 0.05, 24),
+      new THREE.MeshBasicMaterial({
+        color: accent,
+        transparent: true,
+        opacity: 0.3,
+      }),
+    );
+    glow.position.y = -0.1;
+    glow.rotation.x = Math.PI / 2;
+    group.add(glow);
+  }
+
+  group.traverse((object) => {
+    if (object.isMesh) {
+      object.castShadow = true;
+      object.receiveShadow = true;
+    }
+  });
+
+  return group;
+}
+
+function clearGroupChildren(group) {
+  for (let index = group.children.length - 1; index >= 0; index -= 1) {
+    const child = group.children[index];
+    group.remove(child);
+    child.traverse(disposeObject);
+  }
+}
+
+function setHeldWeaponMesh(targetGroup, weapon) {
+  clearGroupChildren(targetGroup);
+  if (!weapon?.type || !weapon?.rarity) {
+    return;
+  }
+  targetGroup.add(createWeaponPlaceholderMesh(weapon.type, weapon.rarity, { held: true }));
+}
+
+function setMuzzleFlashState(targetGroup, intensity) {
+  targetGroup.traverse((object) => {
+    if (object.name !== "muzzleFlash" || !object.material) {
+      return;
+    }
+
+    object.visible = intensity > 0.01;
+    object.material.opacity = intensity * 0.95;
+    object.scale.setScalar(0.85 + intensity * 0.65);
+  });
+}
+
+function createToiletFallback() {
+  const root = new THREE.Group();
+  const porcelainMaterial = new THREE.MeshStandardMaterial({
+    color: 0xd9e4eb,
+    roughness: 0.36,
+    metalness: 0.08,
+  });
+  const grimeMaterial = new THREE.MeshStandardMaterial({
+    color: 0x6c5d49,
+    roughness: 0.92,
+  });
+
+  const base = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.35, 1.05), porcelainMaterial);
+  base.position.y = 0.18;
+  const tank = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.75, 0.28), porcelainMaterial);
+  tank.position.set(0, 0.72, -0.38);
+  const seat = new THREE.Mesh(new THREE.TorusGeometry(0.27, 0.1, 16, 24), porcelainMaterial);
+  seat.rotation.x = Math.PI / 2;
+  seat.position.set(0, 0.44, 0.05);
+  const bowl = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.42, 0.42, 20), grimeMaterial);
+  bowl.position.set(0, 0.3, 0.08);
+  bowl.scale.y = 0.55;
+
+  root.add(base, tank, bowl, seat);
+  root.traverse((object) => {
+    if (object.isMesh) {
+      object.castShadow = true;
+      object.receiveShadow = true;
+    }
+  });
+  return root;
+}
+
+function cloneToiletMesh() {
+  if (toiletAsset.model) {
+    const clone = toiletAsset.model.clone(true);
+    clone.traverse((object) => {
+      if (object.isMesh) {
+        object.geometry = object.geometry?.clone?.() ?? object.geometry;
+        object.material = Array.isArray(object.material)
+          ? object.material.map((material) => material.clone())
+          : object.material?.clone?.() ?? object.material;
+        object.castShadow = true;
+        object.receiveShadow = true;
+      }
+    });
+    return clone;
+  }
+
+  return createToiletFallback();
+}
+
+function createToiletGlow(rarityColor = "#f4cf56") {
+  const group = new THREE.Group();
+  const glowColor = new THREE.Color(rarityColor);
+  const ring = new THREE.Mesh(
+    new THREE.TorusGeometry(0.95, 0.08, 16, 40),
+    new THREE.MeshStandardMaterial({
+      color: glowColor,
+      emissive: glowColor,
+      emissiveIntensity: 1,
+      roughness: 0.32,
+      metalness: 0.04,
+      transparent: true,
+      opacity: 0.92,
+    }),
+  );
+  ring.rotation.x = Math.PI / 2;
+  ring.position.y = 0.02;
+  const fill = new THREE.Mesh(
+    new THREE.CircleGeometry(0.92, 32),
+    new THREE.MeshBasicMaterial({
+      color: glowColor,
+      transparent: true,
+      opacity: 0.16,
+    }),
+  );
+  fill.rotation.x = -Math.PI / 2;
+  fill.position.y = 0.01;
+  const light = new THREE.PointLight(glowColor, 4, 5.6, 2);
+  light.position.set(0, 1.15, 0);
+  group.add(fill, ring, light);
+  return group;
+}
+
+function createToiletVisual(toiletSnapshot) {
+  const root = new THREE.Group();
+  root.position.set(
+    toiletSnapshot.position.x,
+    getSupportHeight(toiletSnapshot.position) + 0.03,
+    toiletSnapshot.position.z,
+  );
+  root.rotation.y = toiletSnapshot.yaw ?? 0;
+  const mesh = cloneToiletMesh();
+  const glow = createToiletGlow();
+  root.add(mesh, glow);
+  toiletsRoot.add(root);
+  return {
+    id: toiletSnapshot.id,
+    snapshot: toiletSnapshot,
+    root,
+    mesh,
+    glow,
+    bobTime: Math.random() * Math.PI * 2,
+    shake: 0,
+  };
+}
+
+function createGroundLootVisual(lootSnapshot) {
+  const root = new THREE.Group();
+  const supportY = getSupportHeight(lootSnapshot.position) + 0.36;
+  const sourceToilet = lootSnapshot.sourceToiletId ? lootState.toilets.get(lootSnapshot.sourceToiletId) : null;
+  const spawnOrigin = sourceToilet
+    ? sourceToilet.root.position.clone().add(new THREE.Vector3(0, 0.82, 0))
+    : new THREE.Vector3(lootSnapshot.position.x, supportY + 0.18, lootSnapshot.position.z);
+  root.position.set(
+    spawnOrigin.x,
+    spawnOrigin.y,
+    spawnOrigin.z,
+  );
+  const mesh = createWeaponPlaceholderMesh(lootSnapshot.type, lootSnapshot.rarity, { world: true });
+  mesh.rotation.set(0.12, Math.random() * Math.PI * 2, 0.08);
+  const rarityColor = new THREE.Color(WEAPON_RARITY_COLORS[lootSnapshot.rarity] ?? "#8b939d");
+  const light = new THREE.PointLight(rarityColor, 2.4, 4.2, 2);
+  light.position.y = 0.6;
+  root.add(mesh, light);
+  groundLootRoot.add(root);
+  return {
+    id: lootSnapshot.id,
+    snapshot: lootSnapshot,
+    root,
+    mesh,
+    light,
+    bobTime: Math.random() * Math.PI * 2,
+    spawnProgress: 0,
+    spawnOrigin,
+    targetPosition: new THREE.Vector3(lootSnapshot.position.x, supportY, lootSnapshot.position.z),
+  };
+}
+
+function syncLocalHeldWeapon() {
+  setHeldWeaponMesh(weaponRoot, getCurrentWeapon());
+  weaponRoot.visible =
+    hero.root.visible &&
+    (state.playerPhase === MATCH_PHASES.active || state.playerPhase === MATCH_PHASES.glide);
+}
+
+function syncInventoryHud() {
+  if (!inventoryHudEl) {
+    return;
+  }
+
+  const showInventory =
+    multiplayerState.joined &&
+    !multiplayerState.menuOpen &&
+    (state.playerPhase === MATCH_PHASES.active || state.playerPhase === MATCH_PHASES.glide);
+  inventoryHudEl.classList.toggle("hidden", !showInventory);
+
+  inventorySlotEls.forEach((element, index) => {
+    const weapon = weaponState.slots[index];
+    const rarity = weapon?.rarity ?? "gray";
+    element.className = `inventory-slot ${weapon ? `inventory-slot--${rarity}` : "inventory-slot--empty"} ${index === weaponState.equippedSlot ? "inventory-slot--selected" : ""}`;
+    element.style.setProperty("--rarity-color", WEAPON_RARITY_COLORS[rarity] ?? "#8b939d");
+    element.querySelector(".inventory-slot__index").textContent = `${index + 1}`;
+    element.querySelector(".inventory-slot__icon").textContent = weapon ? weaponIconByType[weapon.type] ?? "?" : "-";
+    element.querySelector(".inventory-slot__name").textContent = weapon ? getWeaponDisplayName(weapon.type) : "TOM";
+  });
+}
+
+function updateReticleVisual() {
+  const size = 8 + weaponState.crosshairBloom * 46;
+  const opacity =
+    multiplayerState.menuOpen || state.playerPhase !== MATCH_PHASES.active ? 0.8 : 1;
+  document.documentElement.style.setProperty("--reticle-size", `${size}px`);
+  if (canvas) {
+    canvas.style.setProperty("--reticle-size", `${size}px`);
+  }
+  const reticleEl = document.querySelector(".reticle");
+  if (reticleEl) {
+    reticleEl.style.width = `${size}px`;
+    reticleEl.style.height = `${size}px`;
+    reticleEl.style.opacity = `${opacity}`;
+  }
+}
+
+function showLootToast(weapon) {
+  if (!lootToastEl || !weapon) {
+    return;
+  }
+
+  weaponState.currentToast = weapon;
+  weaponState.toastTimer = weaponVisualConfig.toastLife;
+  lootToastEl.classList.remove("hidden");
+  lootToastEl.style.setProperty("--rarity-color", WEAPON_RARITY_COLORS[weapon.rarity] ?? "#8b939d");
+  lootToastRarityEl.textContent = getWeaponRarityLabel(weapon.rarity);
+  lootToastNameEl.textContent = getWeaponDisplayName(weapon.type);
+}
+
+function triggerHitmarker() {
+  weaponState.hitmarkerTimer = weaponVisualConfig.hitmarkerLife;
+  hitmarkerEl?.classList.remove("hidden");
+}
+
+function loadToiletModel() {
+  gltfLoader.load(
+    "/models/game_ready_-_dirty_old_toilet.glb",
+    (gltf) => {
+      const model = gltf.scene;
+      const box = new THREE.Box3().setFromObject(model);
+      const size = box.getSize(tempVecT);
+      const maxSide = Math.max(size.x, size.y, size.z, 1);
+      const scale = 1.5 / maxSide;
+      model.scale.setScalar(scale);
+      const normalizedBox = new THREE.Box3().setFromObject(model);
+      const center = normalizedBox.getCenter(tempVecU).clone();
+      model.position.sub(center);
+      model.position.y -= normalizedBox.min.y;
+      toiletAsset.model = model;
+
+      for (const toilet of lootState.toilets.values()) {
+        toilet.root.remove(toilet.mesh);
+        toilet.mesh.traverse(disposeObject);
+        toilet.mesh = cloneToiletMesh();
+        toilet.root.add(toilet.mesh);
+      }
+    },
+    undefined,
+    () => {
+      // Fallback toilet meshes are already enough for gameplay.
+    },
+  );
+}
+
 function pruneBattleBusModel(model) {
   const meshEntries = [];
   model.updateMatrixWorld(true);
@@ -744,6 +1210,10 @@ function setRosterPlayers(players = []) {
       ...player,
       ready: Boolean(player.ready),
       playerPhase: player.playerPhase ?? MATCH_PHASES.staging,
+      equippedSlot: player.equippedSlot ?? 0,
+      equippedWeaponType: player.equippedWeaponType ?? "",
+      equippedWeaponRarity: player.equippedWeaponRarity ?? "",
+      isSearching: Boolean(player.isSearching),
     });
   });
   syncLocalRosterState();
@@ -761,6 +1231,10 @@ function upsertRosterPlayer(player) {
     ...player,
     ready: Boolean(player.ready ?? previous.ready),
     playerPhase: player.playerPhase ?? previous.playerPhase ?? MATCH_PHASES.staging,
+    equippedSlot: player.equippedSlot ?? previous.equippedSlot ?? 0,
+    equippedWeaponType: player.equippedWeaponType ?? previous.equippedWeaponType ?? "",
+    equippedWeaponRarity: player.equippedWeaponRarity ?? previous.equippedWeaponRarity ?? "",
+    isSearching: Boolean(player.isSearching ?? previous.isSearching),
   });
   syncLocalRosterState();
   renderLobbyPlayerList();
@@ -782,6 +1256,11 @@ function syncLocalRosterState() {
   setMinecraftAvatarName(hero, multiplayerState.selfName || playerProfile.name || "Du");
   if (localPlayer.skinDataUrl) {
     setMinecraftAvatarSkin(hero, localPlayer.skinDataUrl);
+  }
+  if (Number.isFinite(localPlayer.equippedSlot)) {
+    weaponState.equippedSlot = localPlayer.equippedSlot;
+    syncLocalHeldWeapon();
+    syncInventoryHud();
   }
 }
 
@@ -3489,6 +3968,19 @@ function handleMultiplayerStateChange({ connectionState, lobbyId, reason }) {
     multiplayerState.localActionState = createActionState();
     multiplayerState.matchState = createMatchState();
     multiplayerState.playerRoster.clear();
+    weaponState.slots = createEmptyLoadout();
+    weaponState.equippedSlot = 0;
+    weaponState.pointerDown = false;
+    weaponState.triggerReleased = true;
+    weaponState.localFireCooldown = 0;
+    weaponState.hitmarkerTimer = 0;
+    weaponState.toastTimer = 0;
+    clearWeaponTracers();
+    hitmarkerEl?.classList.add("hidden");
+    lootToastEl?.classList.add("hidden");
+    clearLootVisuals();
+    syncLocalHeldWeapon();
+    syncInventoryHud();
     clearRemotePlayers();
     resetInputState();
     state.localReady = false;
@@ -3537,6 +4029,13 @@ function handleLobbyWelcome(message) {
 
   if (message.matchState) {
     applyMatchStateMessage(message.matchState);
+  }
+
+  if (message.loadoutState) {
+    handleLoadoutStateMessage(message.loadoutState);
+  }
+  if (message.lootState) {
+    handleLootStateMessage(message.lootState);
   }
 
   setMenuOpen(false);
@@ -3661,6 +4160,7 @@ function resetRoundState() {
   clearPoopRopes();
   clearSplats();
   clearImpactBursts();
+  clearWeaponTracers();
   multiplayerState.localActionState = createActionState();
   state.moveAmount = 0;
   state.walkCycle = 0;
@@ -3677,6 +4177,20 @@ function resetRoundState() {
   state.strikeResolved = true;
   state.glideVelocity.set(0, 0, 0);
   state.autoDropTriggered = false;
+  weaponState.pointerDown = false;
+  weaponState.triggerReleased = true;
+  weaponState.crosshairBloom = 0;
+  weaponState.recoilKick = 0;
+  weaponState.recoilYaw = 0;
+  weaponState.muzzleTimer = 0;
+  weaponState.hitmarkerTimer = 0;
+  weaponState.toastTimer = 0;
+  weaponState.currentToast = null;
+  weaponState.localFireCooldown = 0;
+  interactState.keyDown = false;
+  interactState.pressBuffer = 0;
+  interactState.localSearchToiletId = null;
+  interactState.progress = 0;
   poopHoldState.pointerId = null;
   poopHoldState.isPointerDown = false;
   poopHoldState.holdTime = 0;
@@ -3684,6 +4198,9 @@ function resetRoundState() {
   poopHoldState.tapStrikeArmed = false;
   activePoopRope = null;
   gameOverEl.classList.add("hidden");
+  hitmarkerEl?.classList.add("hidden");
+  lootToastEl?.classList.add("hidden");
+  setMuzzleFlashState(weaponRoot, 0);
   updateHud();
 }
 
@@ -3818,6 +4335,239 @@ function handleLobbyAction(message) {
   }
 }
 
+function upsertToiletSnapshot(toiletSnapshot) {
+  if (!toiletSnapshot?.id || !toiletSnapshot.position) {
+    return;
+  }
+
+  let toilet = lootState.toilets.get(toiletSnapshot.id);
+  const previousSnapshot = toilet?.snapshot ?? null;
+  if (!toilet) {
+    toilet = createToiletVisual(toiletSnapshot);
+    lootState.toilets.set(toiletSnapshot.id, toilet);
+  }
+
+  toilet.snapshot = {
+    ...toilet.snapshot,
+    ...toiletSnapshot,
+  };
+  toilet.root.position.set(
+    toilet.snapshot.position.x,
+    getSupportHeight(toilet.snapshot.position) + 0.03,
+    toilet.snapshot.position.z,
+  );
+  toilet.root.rotation.y = toilet.snapshot.yaw ?? 0;
+  toilet.glow.visible = Boolean(toilet.snapshot.glowActive);
+  toilet.shake = toiletSnapshot.searchingPlayerId ? Math.max(toilet.shake, 0.36) : toilet.shake;
+  if (!previousSnapshot?.opened && toilet.snapshot.opened) {
+    toilet.shake = Math.max(toilet.shake, 0.62);
+  }
+}
+
+function removeGroundLootSnapshot(groundLootId) {
+  const groundLoot = lootState.groundLoot.get(groundLootId);
+  if (!groundLoot) {
+    return;
+  }
+
+  groundLootRoot.remove(groundLoot.root);
+  groundLoot.root.traverse(disposeObject);
+  lootState.groundLoot.delete(groundLootId);
+}
+
+function upsertGroundLootSnapshot(groundLootSnapshot) {
+  if (!groundLootSnapshot?.id || !groundLootSnapshot.position) {
+    return;
+  }
+
+  let groundLoot = lootState.groundLoot.get(groundLootSnapshot.id);
+  if (!groundLoot) {
+    groundLoot = createGroundLootVisual(groundLootSnapshot);
+    lootState.groundLoot.set(groundLootSnapshot.id, groundLoot);
+  }
+
+  groundLoot.snapshot = {
+    ...groundLoot.snapshot,
+    ...groundLootSnapshot,
+  };
+  groundLoot.targetPosition.set(
+    groundLoot.snapshot.position.x,
+    getSupportHeight(groundLoot.snapshot.position) + 0.36,
+    groundLoot.snapshot.position.z,
+  );
+}
+
+function applyLootStateSnapshot(message) {
+  const nextToiletIds = new Set();
+  for (const toiletSnapshot of message.toilets ?? []) {
+    nextToiletIds.add(toiletSnapshot.id);
+    upsertToiletSnapshot(toiletSnapshot);
+  }
+  for (const [toiletId, toilet] of lootState.toilets) {
+    if (nextToiletIds.has(toiletId)) {
+      continue;
+    }
+    toiletsRoot.remove(toilet.root);
+    toilet.root.traverse(disposeObject);
+    lootState.toilets.delete(toiletId);
+  }
+
+  const nextGroundLootIds = new Set();
+  for (const groundLootSnapshot of message.groundLoot ?? []) {
+    nextGroundLootIds.add(groundLootSnapshot.id);
+    upsertGroundLootSnapshot(groundLootSnapshot);
+  }
+  for (const groundLootId of lootState.groundLoot.keys()) {
+    if (!nextGroundLootIds.has(groundLootId)) {
+      removeGroundLootSnapshot(groundLootId);
+    }
+  }
+}
+
+function handleLootStateMessage(message) {
+  applyLootStateSnapshot(message);
+}
+
+function handleLootEventMessage(message) {
+  if (message.toilet) {
+    upsertToiletSnapshot(message.toilet);
+  }
+  if (message.groundLoot) {
+    upsertGroundLootSnapshot(message.groundLoot);
+  }
+  if (message.removedGroundLootId) {
+    removeGroundLootSnapshot(message.removedGroundLootId);
+  }
+  if (message.addedGroundLoot) {
+    upsertGroundLootSnapshot(message.addedGroundLoot);
+  }
+
+  if (
+    message.toilet?.id &&
+    interactState.localSearchToiletId === message.toilet.id &&
+    (message.kind === "toilet-search-cancel" || message.kind === "toilet-search-complete")
+  ) {
+    interactState.localSearchToiletId = null;
+    interactState.progress = 0;
+  }
+
+  if (message.kind === "toilet-search-complete" && message.toilet?.position) {
+    createImpactBurst(
+      new THREE.Vector3(
+        message.toilet.position.x,
+        message.toilet.position.y + 1.15,
+        message.toilet.position.z,
+      ),
+      new THREE.Vector3(0, 2.6, 0),
+    );
+
+    if (
+      message.playerId === multiplayerState.selfId &&
+      message.autoCollected &&
+      message.pickedWeapon?.type &&
+      message.pickedWeapon?.rarity
+    ) {
+      showLootToast(message.pickedWeapon);
+    }
+  }
+
+  if (message.kind === "ground-loot-picked-up" && message.playerId === multiplayerState.selfId) {
+    if (message.pickedWeapon?.type && message.pickedWeapon?.rarity) {
+      showLootToast(message.pickedWeapon);
+    }
+    interactState.progress = 0;
+  }
+}
+
+function handleLoadoutStateMessage(message) {
+  weaponState.slots = (message.slots ?? createEmptyLoadout()).map((weapon) =>
+    weapon?.type && weapon?.rarity
+      ? {
+          id: weapon.id,
+          type: weapon.type,
+          rarity: weapon.rarity,
+        }
+      : null,
+  );
+  weaponState.equippedSlot = Math.max(0, Math.min(WEAPON_SLOT_COUNT - 1, message.equippedSlot ?? 0));
+  syncLocalHeldWeapon();
+  syncInventoryHud();
+}
+
+function spawnTracer(origin, impactPoint, rarity) {
+  const tracer = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.03, 0.03, 1, 8),
+    new THREE.MeshBasicMaterial({
+      color: WEAPON_RARITY_COLORS[rarity] ?? "#ffffff",
+      transparent: true,
+      opacity: 0.95,
+    }),
+  );
+  tempVecT.copy(impactPoint).sub(origin);
+  const distance = Math.max(0.08, tempVecT.length());
+  tracer.scale.set(1, distance, 1);
+  tracer.position.copy(origin).lerp(impactPoint, 0.5);
+  tracer.quaternion.setFromUnitVectors(upVector, tempVecT.normalize());
+  scene.add(tracer);
+  weaponState.tracerBeams.push({
+    mesh: tracer,
+    life: weaponVisualConfig.tracerLife,
+  });
+}
+
+function handleCombatEventMessage(message) {
+  if (message.kind === COMBAT_EVENT_KINDS.weaponFired) {
+    if (message.playerId === multiplayerState.selfId) {
+      return;
+    }
+
+    const origin = new THREE.Vector3(
+      message.event.origin?.x ?? 0,
+      message.event.origin?.y ?? 0,
+      message.event.origin?.z ?? 0,
+    );
+    const impactPoint = new THREE.Vector3(
+      message.event.impactPoint?.x ?? origin.x,
+      message.event.impactPoint?.y ?? origin.y,
+      message.event.impactPoint?.z ?? origin.z,
+    );
+    spawnTracer(origin, impactPoint, message.event.weaponRarity);
+    const remotePlayer = ensureRemotePlayer(message.playerId);
+    remotePlayer.strikeTimer = 0;
+    return;
+  }
+
+  if (message.kind === COMBAT_EVENT_KINDS.weaponHit) {
+    const impactPoint = new THREE.Vector3(
+      message.event.impactPoint?.x ?? 0,
+      message.event.impactPoint?.y ?? 0,
+      message.event.impactPoint?.z ?? 0,
+    );
+    createImpactBurst(impactPoint, new THREE.Vector3(0, 2.2, 0));
+    if (message.playerId === multiplayerState.selfId) {
+      triggerHitmarker();
+    }
+    if (message.event.targetPlayerId === multiplayerState.selfId) {
+      state.hemorrhoids = THREE.MathUtils.clamp(
+        state.hemorrhoids + (message.event.damage ?? 0),
+        0,
+        100,
+      );
+      updateHud();
+    }
+    return;
+  }
+
+  if (
+    message.kind === COMBAT_EVENT_KINDS.playerEliminated &&
+    message.event.targetPlayerId === multiplayerState.selfId
+  ) {
+    if (!state.gameOver) {
+      triggerGameOver();
+    }
+  }
+}
+
 function handleLobbyWorldEvent(message) {
   if (message.event?.kind === WORLD_EVENT_KINDS.targetHit) {
     applyTargetHitVisuals(
@@ -3922,6 +4672,9 @@ function clearRemotePlayers() {
       destroyPoopRope(remotePlayer.rope);
       remotePlayer.rope = null;
     }
+    if (remotePlayer.weaponRoot) {
+      clearGroupChildren(remotePlayer.weaponRoot);
+    }
     remotePlayersRoot.remove(remotePlayer.avatar.root);
     remotePlayer.avatar.root.traverse(disposeObject);
   }
@@ -3942,9 +4695,30 @@ function removeRemotePlayer(playerId) {
     destroyPoopRope(remotePlayer.rope);
     remotePlayer.rope = null;
   }
+  if (remotePlayer.weaponRoot) {
+    clearGroupChildren(remotePlayer.weaponRoot);
+  }
   remotePlayersRoot.remove(remotePlayer.avatar.root);
   remotePlayer.avatar.root.traverse(disposeObject);
   multiplayerState.remotePlayers.delete(playerId);
+}
+
+function syncRemotePlayerWeaponMesh(remotePlayer) {
+  if (!remotePlayer.weaponRoot) {
+    return;
+  }
+
+  if (!remotePlayer.equippedWeaponType || !remotePlayer.equippedWeaponRarity) {
+    clearGroupChildren(remotePlayer.weaponRoot);
+    return;
+  }
+
+  clearGroupChildren(remotePlayer.weaponRoot);
+  remotePlayer.weaponRoot.add(
+    createWeaponPlaceholderMesh(remotePlayer.equippedWeaponType, remotePlayer.equippedWeaponRarity, {
+      held: true,
+    }),
+  );
 }
 
 function ensureRemotePlayer(playerId, playerMeta = null) {
@@ -3973,6 +4747,19 @@ function ensureRemotePlayer(playerId, playerMeta = null) {
     if (Number.isFinite(playerMeta?.guestIndex)) {
       remotePlayer.guestIndex = playerMeta.guestIndex;
     }
+    if (Number.isFinite(playerMeta?.equippedSlot)) {
+      remotePlayer.equippedSlot = playerMeta.equippedSlot;
+    }
+    if ("equippedWeaponType" in (playerMeta ?? {})) {
+      remotePlayer.equippedWeaponType = playerMeta.equippedWeaponType || "";
+    }
+    if ("equippedWeaponRarity" in (playerMeta ?? {})) {
+      remotePlayer.equippedWeaponRarity = playerMeta.equippedWeaponRarity || "";
+    }
+    if ("isSearching" in (playerMeta ?? {})) {
+      remotePlayer.isSearching = Boolean(playerMeta.isSearching);
+    }
+    syncRemotePlayerWeaponMesh(remotePlayer);
     return remotePlayer;
   }
 
@@ -3980,6 +4767,8 @@ function ensureRemotePlayer(playerId, playerMeta = null) {
     name: playerMeta?.name ?? "Gast",
     skinDataUrl: playerMeta?.skinDataUrl ?? DEFAULT_SKIN_DATA_URL,
   });
+  const weaponRootGroup = new THREE.Group();
+  avatar.weaponAnchor.add(weaponRootGroup);
   remotePlayersRoot.add(avatar.root);
   remotePlayer = {
     id: playerId,
@@ -3998,11 +4787,17 @@ function ensureRemotePlayer(playerId, playerMeta = null) {
     ready: Boolean(playerMeta?.ready),
     playerPhase: playerMeta?.playerPhase ?? MATCH_PHASES.staging,
     guestIndex: playerMeta?.guestIndex ?? 0,
+    weaponRoot: weaponRootGroup,
+    equippedSlot: playerMeta?.equippedSlot ?? 0,
+    equippedWeaponType: playerMeta?.equippedWeaponType ?? "",
+    equippedWeaponRarity: playerMeta?.equippedWeaponRarity ?? "",
+    isSearching: Boolean(playerMeta?.isSearching),
   };
   multiplayerState.remotePlayers.set(playerId, remotePlayer);
   if (remotePlayer.actionState.poopActive) {
     ensureRemotePoopRope(remotePlayer);
   }
+  syncRemotePlayerWeaponMesh(remotePlayer);
   return remotePlayer;
 }
 
@@ -4108,6 +4903,12 @@ function updateRemotePlayers(delta, now) {
       remotePlayer.ready = Boolean(rosterPlayer.ready);
       remotePlayer.playerPhase = rosterPlayer.playerPhase ?? remotePlayer.playerPhase;
       remotePlayer.guestIndex = rosterPlayer.guestIndex ?? remotePlayer.guestIndex;
+      remotePlayer.equippedSlot = rosterPlayer.equippedSlot ?? remotePlayer.equippedSlot;
+      remotePlayer.equippedWeaponType = rosterPlayer.equippedWeaponType ?? remotePlayer.equippedWeaponType;
+      remotePlayer.equippedWeaponRarity =
+        rosterPlayer.equippedWeaponRarity ?? remotePlayer.equippedWeaponRarity;
+      remotePlayer.isSearching = Boolean(rosterPlayer.isSearching ?? remotePlayer.isSearching);
+      syncRemotePlayerWeaponMesh(remotePlayer);
     }
 
     if (remotePlayer.playerPhase === MATCH_PHASES.bus) {
@@ -4177,6 +4978,8 @@ function updateRemotePlayers(delta, now) {
           remotePlayer.strikeTimer > 0
             ? Math.sin((1 - remotePlayer.strikeTimer / strikeConfig.duration) * Math.PI)
             : 0,
+        weaponHoldAmount: remotePlayer.equippedWeaponType ? 1 : 0,
+        weaponPitch: 0,
       },
       delta,
     );
@@ -4244,21 +5047,25 @@ function onResize() {
   renderer.setSize(window.innerWidth, window.innerHeight);
 }
 
+function isKeyboardAction(event, code, key) {
+  return event.code === code || event.key?.toLowerCase?.() === key;
+}
+
 function onKeyDown(event) {
   if (!multiplayerState.joined) {
     return;
   }
 
-  if (event.code === "KeyW") {
+  if (isKeyboardAction(event, "KeyW", "w")) {
     input.forward = true;
   }
-  if (event.code === "KeyS") {
+  if (isKeyboardAction(event, "KeyS", "s")) {
     input.backward = true;
   }
-  if (event.code === "KeyA") {
+  if (isKeyboardAction(event, "KeyA", "a")) {
     input.left = true;
   }
-  if (event.code === "KeyD") {
+  if (isKeyboardAction(event, "KeyD", "d")) {
     input.right = true;
   }
   if (event.code === "Space") {
@@ -4274,8 +5081,22 @@ function onKeyDown(event) {
       state.grounded = false;
     }
   }
-  if (event.code === "KeyF" && state.playerPhase === MATCH_PHASES.active) {
+  if (isKeyboardAction(event, "KeyF", "f") && state.playerPhase === MATCH_PHASES.active) {
     performStrike();
+  }
+  if (isKeyboardAction(event, "KeyE", "e") && state.playerPhase === MATCH_PHASES.active && !event.repeat) {
+    interactState.keyDown = true;
+    interactState.pressBuffer = 0.24;
+    beginInteraction();
+  }
+  if (event.code === "Digit1") {
+    selectWeaponSlot(0);
+  }
+  if (event.code === "Digit2") {
+    selectWeaponSlot(1);
+  }
+  if (event.code === "Digit3") {
+    selectWeaponSlot(2);
   }
   if (event.code === "KeyR" && state.gameOver) {
     resetRound();
@@ -4288,17 +5109,22 @@ function onKeyUp(event) {
     return;
   }
 
-  if (event.code === "KeyW") {
+  if (isKeyboardAction(event, "KeyW", "w")) {
     input.forward = false;
   }
-  if (event.code === "KeyS") {
+  if (isKeyboardAction(event, "KeyS", "s")) {
     input.backward = false;
   }
-  if (event.code === "KeyA") {
+  if (isKeyboardAction(event, "KeyA", "a")) {
     input.left = false;
   }
-  if (event.code === "KeyD") {
+  if (isKeyboardAction(event, "KeyD", "d")) {
     input.right = false;
+  }
+  if (isKeyboardAction(event, "KeyE", "e")) {
+    interactState.keyDown = false;
+    interactState.pressBuffer = 0;
+    cancelInteraction();
   }
 }
 
@@ -4361,7 +5187,13 @@ function onPointerDown(event) {
   }
 
   if (!state.isOnPhone) {
-    performStrike();
+    const weapon = getCurrentWeapon();
+    if (weapon) {
+      weaponState.pointerDown = true;
+      attemptLocalWeaponFire(true);
+    } else {
+      performStrike();
+    }
     return;
   }
 
@@ -4384,6 +5216,9 @@ function onPointerMove(event) {
 }
 
 function onPointerUp(event) {
+  weaponState.pointerDown = false;
+  weaponState.triggerReleased = true;
+
   if (poopHoldState.pointerId !== null && event.pointerId !== poopHoldState.pointerId) {
     return;
   }
@@ -4397,6 +5232,30 @@ function onPointerUp(event) {
   }
 
   stopPoopHold();
+}
+
+function onMouseWheel(event) {
+  if (!multiplayerState.joined || multiplayerState.menuOpen) {
+    return;
+  }
+
+  if (state.playerPhase !== MATCH_PHASES.active && state.playerPhase !== MATCH_PHASES.glide) {
+    return;
+  }
+
+  event.preventDefault();
+  const direction = event.deltaY > 0 ? 1 : -1;
+  const nextSlot = (weaponState.equippedSlot + direction + WEAPON_SLOT_COUNT) % WEAPON_SLOT_COUNT;
+  selectWeaponSlot(nextSlot);
+}
+
+function onInventorySlotClick(event) {
+  const slot = Number(event.currentTarget.dataset.slotIndex);
+  if (!Number.isFinite(slot)) {
+    return;
+  }
+
+  selectWeaponSlot(slot);
 }
 
 function onPointerCancel(event) {
@@ -4509,6 +5368,307 @@ function updatePoopHold(delta) {
   trimPoopRopes();
   setLocalPoopActive(true);
   setMessage("Trycket slapper. Hall kvar sa vaxer bajskorven.");
+}
+
+function getInteractionTarget() {
+  if (!multiplayerState.joined || state.playerPhase !== MATCH_PHASES.active) {
+    return null;
+  }
+
+  let bestGroundLoot = null;
+  let bestGroundLootDistance = Number.POSITIVE_INFINITY;
+  for (const groundLoot of lootState.groundLoot.values()) {
+    const distance = planarDistanceXZ(state.playerPosition, groundLoot.snapshot.position);
+    if (distance > GROUND_LOOT_PICKUP_RANGE || distance >= bestGroundLootDistance) {
+      continue;
+    }
+    bestGroundLoot = groundLoot;
+    bestGroundLootDistance = distance;
+  }
+  if (bestGroundLoot) {
+    return {
+      kind: "ground-loot",
+      id: bestGroundLoot.id,
+      title: "PLOCKA UPP",
+      subtitle: getWeaponDisplayName(bestGroundLoot.snapshot.type),
+    };
+  }
+
+  let bestToilet = null;
+  let bestToiletDistance = Number.POSITIVE_INFINITY;
+  for (const toilet of lootState.toilets.values()) {
+    if (
+      toilet.snapshot.opened ||
+      !toilet.snapshot.glowActive ||
+      (toilet.snapshot.searchingPlayerId &&
+        toilet.snapshot.searchingPlayerId !== multiplayerState.selfId)
+    ) {
+      continue;
+    }
+    const distance = planarDistanceXZ(state.playerPosition, toilet.snapshot.position);
+    if (distance > TOILET_INTERACT_RANGE || distance >= bestToiletDistance) {
+      continue;
+    }
+    bestToilet = toilet;
+    bestToiletDistance = distance;
+  }
+
+  if (!bestToilet) {
+    return null;
+  }
+
+  return {
+    kind: "toilet",
+    id: bestToilet.id,
+    title: "SOK TOALETT",
+    subtitle: "HALL INNE",
+  };
+}
+
+function beginInteraction() {
+  const target = getInteractionTarget();
+  if (!target) {
+    return;
+  }
+
+  if (target.kind === "ground-loot") {
+    multiplayer.sendInteract(INTERACT_KINDS.pickupGroundLoot, {
+      groundLootId: target.id,
+    });
+    return;
+  }
+
+  if (interactState.localSearchToiletId === target.id) {
+    return;
+  }
+
+  interactState.localSearchToiletId = target.id;
+  interactState.progress = 0;
+  multiplayer.sendInteract(INTERACT_KINDS.searchStart, {
+    toiletId: target.id,
+  });
+}
+
+function cancelInteraction() {
+  if (!interactState.localSearchToiletId) {
+    return;
+  }
+
+  multiplayer.sendInteract(INTERACT_KINDS.searchCancel, {
+    toiletId: interactState.localSearchToiletId,
+  });
+  interactState.localSearchToiletId = null;
+  interactState.progress = 0;
+}
+
+function selectWeaponSlot(slot, shouldBroadcast = true) {
+  if (!Number.isFinite(slot) || slot < 0 || slot >= WEAPON_SLOT_COUNT) {
+    return;
+  }
+
+  weaponState.equippedSlot = slot;
+  syncLocalHeldWeapon();
+  syncInventoryHud();
+  if (shouldBroadcast && multiplayerState.joined) {
+    multiplayer.sendEquipSlot(slot);
+  }
+}
+
+function getCameraAimAngles() {
+  return {
+    yaw: state.cameraYaw + weaponState.recoilYaw * 6.2,
+    pitch: THREE.MathUtils.clamp(state.cameraPitch + weaponState.recoilKick * 0.42, -0.72, 0.28),
+  };
+}
+
+function buildCameraFireDirection(seed, spread) {
+  const aimAngles = getCameraAimAngles();
+  const baseDirection = tempVecT.set(
+    Math.sin(aimAngles.yaw) * Math.cos(aimAngles.pitch),
+    Math.sin(aimAngles.pitch),
+    Math.cos(aimAngles.yaw) * Math.cos(aimAngles.pitch),
+  ).normalize();
+  const random = createSeededRandom(seed);
+  baseDirection.x += (random() - 0.5) * spread;
+  baseDirection.y += (random() - 0.5) * spread;
+  baseDirection.z += (random() - 0.5) * spread;
+  return baseDirection.normalize().clone();
+}
+
+function attemptLocalWeaponFire(forceSingle = false) {
+  const weapon = getCurrentWeapon();
+  if (
+    !weapon ||
+    state.playerPhase !== MATCH_PHASES.active ||
+    state.gameOver ||
+    state.isOnPhone ||
+    !isPointerLocked()
+  ) {
+    return;
+  }
+
+  const definition = WEAPON_DEFINITIONS[weapon.type];
+  if (!definition || weaponState.localFireCooldown > 0) {
+    return;
+  }
+
+  const isSingleFire = weapon.type === WEAPON_TYPES.shotgun;
+  if (isSingleFire && !weaponState.triggerReleased && !forceSingle) {
+    return;
+  }
+
+  const seed = weaponState.nextSeed++;
+  const origin = hero.weaponAnchor.getWorldPosition(tempVecU).clone();
+  const direction = buildCameraFireDirection(seed, definition.spread[weapon.rarity]);
+  const impactPoint = origin.clone().addScaledVector(direction, definition.maxRange);
+
+  spawnTracer(origin, impactPoint, weapon.rarity);
+  weaponState.localFireCooldown = 1 / definition.fireRate;
+  weaponState.crosshairBloom = Math.min(1, weaponState.crosshairBloom + 0.18 + definition.spread[weapon.rarity] * 3.2);
+  weaponState.recoilKick = Math.min(0.28, weaponState.recoilKick + definition.recoilKick[weapon.rarity] * 5.2);
+  weaponState.recoilYaw = THREE.MathUtils.randFloatSpread(0.009);
+  weaponState.muzzleTimer = weaponVisualConfig.muzzleLife;
+  if (isSingleFire) {
+    weaponState.triggerReleased = false;
+  }
+
+  multiplayer.sendFireWeapon({
+    origin,
+    direction,
+    seed,
+  });
+}
+
+function planarDistanceXZ(a, b) {
+  return Math.hypot((a?.x ?? 0) - (b?.x ?? 0), (a?.z ?? 0) - (b?.z ?? 0));
+}
+
+function updateInteractionPrompt(delta) {
+  if (!interactPromptEl || state.playerPhase !== MATCH_PHASES.active || multiplayerState.menuOpen) {
+    interactPromptEl?.classList.add("hidden");
+    return;
+  }
+
+  const target = getInteractionTarget();
+  if (interactState.keyDown && !interactState.localSearchToiletId && target?.kind === "toilet") {
+    beginInteraction();
+  }
+  if (
+    interactState.localSearchToiletId &&
+    (!interactState.keyDown || target?.id !== interactState.localSearchToiletId)
+  ) {
+    cancelInteraction();
+  }
+
+  if (interactState.localSearchToiletId && interactState.keyDown) {
+    interactState.progress = Math.min(
+      1,
+      interactState.progress + delta / (TOILET_SEARCH_DURATION_MS / 1000),
+    );
+  } else if (!interactState.localSearchToiletId) {
+    interactState.progress = 0;
+  }
+
+  const promptTarget =
+    interactState.localSearchToiletId && target?.id === interactState.localSearchToiletId
+      ? target
+      : target;
+  if (!promptTarget) {
+    interactPromptEl.classList.add("hidden");
+    return;
+  }
+
+  interactPromptEl.classList.remove("hidden");
+  interactTitleEl.textContent = promptTarget.title;
+  interactSubtitleEl.textContent = promptTarget.subtitle;
+  interactFillEl.style.width =
+    promptTarget.kind === "toilet" ? `${Math.round(interactState.progress * 100)}%` : "100%";
+}
+
+function updateLootVisuals(delta) {
+  for (const toilet of lootState.toilets.values()) {
+    toilet.bobTime += delta * (toilet.snapshot.glowActive ? 2.4 : 1.6);
+    toilet.shake = THREE.MathUtils.lerp(toilet.shake, 0, 1 - Math.exp(-delta * 8));
+
+    const shakeStrength =
+      toilet.snapshot.searchingPlayerId || toilet.shake > 0.08 ? toilet.shake * 0.045 : 0;
+    toilet.root.position.set(
+      toilet.snapshot.position.x + Math.sin(toilet.bobTime * 22) * shakeStrength,
+      getSupportHeight(toilet.snapshot.position) + 0.03,
+      toilet.snapshot.position.z + Math.cos(toilet.bobTime * 18) * shakeStrength,
+    );
+
+    if (toilet.glow) {
+      const glowPulse = 0.92 + Math.sin(toilet.bobTime * 2.2) * 0.08;
+      toilet.glow.rotation.y += delta * 0.8;
+      toilet.glow.scale.setScalar(glowPulse);
+      toilet.glow.visible = Boolean(toilet.snapshot.glowActive);
+    }
+  }
+
+  for (const groundLoot of lootState.groundLoot.values()) {
+    groundLoot.bobTime += delta * 2.1;
+    groundLoot.spawnProgress = Math.min(1, groundLoot.spawnProgress + delta * 2.8);
+    const lift = Math.sin(groundLoot.bobTime) * 0.14;
+    tempVecV.copy(groundLoot.spawnOrigin).lerp(groundLoot.targetPosition, groundLoot.spawnProgress);
+    groundLoot.root.position.set(
+      tempVecV.x,
+      tempVecV.y + lift,
+      tempVecV.z,
+    );
+    groundLoot.mesh.rotation.y += delta * 1.5;
+    groundLoot.mesh.rotation.x = 0.12 + Math.sin(groundLoot.bobTime * 1.35) * 0.08;
+    groundLoot.light.intensity = 2.1 + Math.sin(groundLoot.bobTime * 2.8) * 0.55;
+  }
+}
+
+function updateWeaponSystem(delta) {
+  if (weaponState.localFireCooldown > 0) {
+    weaponState.localFireCooldown = Math.max(0, weaponState.localFireCooldown - delta);
+  }
+
+  const weapon = getCurrentWeapon();
+  if (
+    weaponState.pointerDown &&
+    weapon &&
+    weapon.type !== WEAPON_TYPES.shotgun &&
+    !state.isOnPhone &&
+    state.playerPhase === MATCH_PHASES.active
+  ) {
+    attemptLocalWeaponFire();
+  }
+
+  weaponState.recoilKick = THREE.MathUtils.lerp(weaponState.recoilKick, 0, 1 - Math.exp(-delta * 14));
+  weaponState.recoilYaw = THREE.MathUtils.lerp(weaponState.recoilYaw, 0, 1 - Math.exp(-delta * 12));
+  weaponState.crosshairBloom = THREE.MathUtils.lerp(weaponState.crosshairBloom, 0, 1 - Math.exp(-delta * 10));
+  weaponState.muzzleTimer = Math.max(0, weaponState.muzzleTimer - delta);
+  weaponState.hitmarkerTimer = Math.max(0, weaponState.hitmarkerTimer - delta);
+  weaponState.toastTimer = Math.max(0, weaponState.toastTimer - delta);
+
+  for (let index = weaponState.tracerBeams.length - 1; index >= 0; index -= 1) {
+    const beam = weaponState.tracerBeams[index];
+    beam.life -= delta;
+    beam.mesh.material.opacity = Math.max(0, beam.life / weaponVisualConfig.tracerLife);
+    if (beam.life <= 0) {
+      scene.remove(beam.mesh);
+      beam.mesh.traverse(disposeObject);
+      weaponState.tracerBeams.splice(index, 1);
+    }
+  }
+
+  if (weaponState.toastTimer <= 0) {
+    lootToastEl?.classList.add("hidden");
+  }
+  if (weaponState.hitmarkerTimer <= 0) {
+    hitmarkerEl?.classList.add("hidden");
+  }
+
+  setMuzzleFlashState(
+    weaponRoot,
+    weaponState.muzzleTimer > 0 ? weaponState.muzzleTimer / weaponVisualConfig.muzzleLife : 0,
+  );
+  updateInteractionPrompt(delta);
+  updateReticleVisual();
 }
 
 function performStrike() {
@@ -4876,20 +6036,37 @@ function updatePlayer(delta) {
       : 0;
   const strikePose = state.strikeAnimation > 0 ? Math.sin(strikeProgress * Math.PI) : 0;
   const strikeTwist = state.strikeAnimation > 0 ? Math.sin(strikeProgress * Math.PI * 0.9) : 0;
+  const weaponEquipped = Boolean(getCurrentWeapon());
+  const weaponHoldAmount =
+    weaponEquipped && state.playerPhase !== MATCH_PHASES.bus && !multiplayerState.menuOpen ? 1 : 0;
+  const weaponPoseAmount =
+    weaponHoldAmount * (1 - strikePose * 0.75) * (1 - Math.min(1, poopPose * 0.9));
+  const weaponPitch = THREE.MathUtils.clamp(state.cameraPitch, -0.55, 0.22);
 
   hero.leftLeg.rotation.x = walkSwing * 0.55 - poopPose * 0.42;
   hero.rightLeg.rotation.x = counterSwing * 0.55 - poopPose * 0.42;
-  hero.leftArm.rotation.x = counterSwing * 0.48 - 0.08 + poopPose * 0.08 - strikePose * 1.75;
-  hero.rightArm.rotation.x = walkSwing * 0.28 + 0.1 + poopPose * 0.14 + strikePose * 0.34;
-  hero.leftArm.rotation.z = 0.03 + poopPose * 0.02 + strikePose * 0.22;
-  hero.rightArm.rotation.z = -0.03 - poopPose * 0.02 - strikePose * 0.08;
+  hero.leftArm.rotation.x =
+    counterSwing * 0.48 - 0.08 + poopPose * 0.08 - strikePose * 1.75 - weaponPoseAmount * 0.14;
+  hero.rightArm.rotation.x =
+    walkSwing * 0.28 +
+    0.1 +
+    poopPose * 0.14 +
+    strikePose * 0.34 -
+    weaponPoseAmount * (0.82 + weaponPitch * 0.62);
+  hero.leftArm.rotation.z = 0.03 + poopPose * 0.02 + strikePose * 0.22 - weaponPoseAmount * 0.1;
+  hero.rightArm.rotation.z =
+    -0.03 - poopPose * 0.02 - strikePose * 0.08 + weaponPoseAmount * 0.14;
   hero.torso.rotation.x = -state.moveAmount * 0.08 - jumpLean + poopPose * 0.2;
-  hero.torso.rotation.y = strikeTwist * 0.34;
+  hero.torso.rotation.y = strikeTwist * 0.34 - weaponPoseAmount * 0.08 - weaponState.recoilYaw * 1.8;
   hero.torso.position.y =
     Math.abs(Math.sin(state.walkCycle * 2)) * state.moveAmount * 0.08 -
     poopPose * 0.08;
   hero.headPivot.rotation.y = Math.sin(clock.elapsedTime * 0.8) * 0.1 - strikeTwist * 0.18;
-  hero.headPivot.rotation.x = -0.05 + Math.cos(clock.elapsedTime * 1.4) * 0.02 - poopPose * 0.04;
+  hero.headPivot.rotation.x =
+    -0.05 +
+    Math.cos(clock.elapsedTime * 1.4) * 0.02 -
+    poopPose * 0.04 -
+    weaponPoseAmount * weaponPitch * 0.22;
 
   if (state.playerPhase === MATCH_PHASES.bus) {
     hero.leftArm.rotation.x = -0.72;
@@ -4910,6 +6087,12 @@ function updatePlayer(delta) {
     hero.torso.rotation.x = -0.22;
     hero.torso.position.y = 0;
   }
+
+  weaponRoot.visible =
+    weaponEquipped &&
+    hero.root.visible &&
+    !multiplayerState.menuOpen &&
+    (state.playerPhase === MATCH_PHASES.active || state.playerPhase === MATCH_PHASES.glide);
 }
 
 function keepInsideStagingPlatform(position) {
@@ -5049,30 +6232,33 @@ function updateCamera(delta) {
     return;
   }
 
+  const aimAngles = getCameraAimAngles();
   const flatForward = tempVecI.set(
-    Math.sin(state.cameraYaw),
+    Math.sin(aimAngles.yaw),
     0,
-    Math.cos(state.cameraYaw),
+    Math.cos(aimAngles.yaw),
   ).normalize();
   const cameraRight = tempVecJ.set(-flatForward.z, 0, flatForward.x);
   const lookDirection = tempVecK.set(
-    Math.sin(state.cameraYaw) * Math.cos(state.cameraPitch),
-    Math.sin(state.cameraPitch),
-    Math.cos(state.cameraYaw) * Math.cos(state.cameraPitch),
+    Math.sin(aimAngles.yaw) * Math.cos(aimAngles.pitch),
+    Math.sin(aimAngles.pitch),
+    Math.cos(aimAngles.yaw) * Math.cos(aimAngles.pitch),
   ).normalize();
   const anchor = tempVecL.copy(state.playerPosition).add(tempVecA.set(0, heroMetrics.cameraAnchorHeight, 0));
   const desiredPosition = tempVecB
     .copy(anchor)
     .addScaledVector(
       flatForward,
-      state.playerPhase === MATCH_PHASES.glide ? -(heroMetrics.cameraDistance + 1.8) : -heroMetrics.cameraDistance,
+      state.playerPhase === MATCH_PHASES.glide
+        ? -(heroMetrics.cameraDistance + 1.8)
+        : -(heroMetrics.cameraDistance + weaponState.recoilKick * 0.7),
     )
     .addScaledVector(cameraRight, heroMetrics.cameraSide)
     .add(
       tempVecC.set(
         0,
         (state.playerPhase === MATCH_PHASES.glide ? heroMetrics.cameraLift + 1.1 : heroMetrics.cameraLift) -
-          state.cameraPitch * 0.9,
+          aimAngles.pitch * 0.9,
         0,
       ),
     );
@@ -6095,6 +7281,32 @@ function clearImpactBursts() {
   }
 }
 
+function clearWeaponTracers() {
+  for (let index = weaponState.tracerBeams.length - 1; index >= 0; index -= 1) {
+    scene.remove(weaponState.tracerBeams[index].mesh);
+    weaponState.tracerBeams[index].mesh.traverse(disposeObject);
+    weaponState.tracerBeams.splice(index, 1);
+  }
+}
+
+function clearLootVisuals() {
+  for (const toilet of lootState.toilets.values()) {
+    toiletsRoot.remove(toilet.root);
+    toilet.root.traverse(disposeObject);
+  }
+  lootState.toilets.clear();
+
+  for (const groundLoot of lootState.groundLoot.values()) {
+    groundLootRoot.remove(groundLoot.root);
+    groundLoot.root.traverse(disposeObject);
+  }
+  lootState.groundLoot.clear();
+
+  interactState.localSearchToiletId = null;
+  interactState.progress = 0;
+  interactPromptEl?.classList.add("hidden");
+}
+
 function dampAngle(current, target, amount) {
   const delta = Math.atan2(Math.sin(target - current), Math.cos(target - current));
   return current + delta * Math.min(amount, 1);
@@ -6130,9 +7342,11 @@ function animate() {
   updatePlayer(delta);
   updatePoopHold(delta);
   updateStrike(delta);
+  updateWeaponSystem(delta);
   updateCamera(delta);
   updateStandingTarget(delta);
   updateAimMarker();
+  updateLootVisuals(delta);
   updatePoopRopes(delta);
   updateProjectiles(delta);
   updateRemotePlayers(delta, now);

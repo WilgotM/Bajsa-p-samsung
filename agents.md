@@ -40,6 +40,19 @@ Det här är ett litet 3D-webbspel byggt med Vite och Three.js.
 - Träff på annan spelare i samma lobby skickas som `player-hit` via Workern.
 - Spelaren som blir träffad får ökad hemorojdrisk, men med låg handskada (förberett för framtida vapenbalans).
 
+## Vapen
+
+- V1 använder tre vapentyper: `assault-rifle`, `shotgun` och `smg`.
+- Just nu spawnar alla spelare direkt med samma starter-loadout:
+  - slot 1: grå `assault-rifle`
+  - slot 2: grå `shotgun`
+  - slot 3: grå `smg`
+- Loadouten är server-auktoritativ och skickas till klienten som `loadout-state`.
+- Klienten kan byta slot med `equip-slot` och skjuta med `fire-weapon`.
+- Vapen är hitscan och valideras av Workern med fire rate, range och målträff innan skada delas ut.
+- Vapenskada ökar samma hemorojdmätare som övrig gameplay. Vid `100` skickas `player-eliminated`.
+- Toilet-loot och mark-loot är tillfälligt avstängt. Tanken är att uppgraderingar/loot kommer tillbaka senare i en enklare iteration.
+
 ## Spelarprofiler och skins
 
 - Startmenyn har en `Skin + namn`-sektion där spelaren kan skriva eget namn.

@@ -156,7 +156,46 @@
         </div>
       </section>
 
+      <section id="interact-prompt" class="interact-prompt hidden" aria-live="polite">
+        <div class="interact-prompt__key">E</div>
+        <div class="interact-prompt__copy">
+          <strong id="interact-title">SÖK TOALETT</strong>
+          <span id="interact-subtitle">HÅLL INNE</span>
+        </div>
+        <div class="interact-prompt__track">
+          <div id="interact-fill" class="interact-prompt__fill"></div>
+        </div>
+      </section>
+
+      <section id="inventory-hud" class="inventory-hud hidden" aria-label="Inventory">
+        <div id="inventory-slots" class="inventory-hud__slots">
+          <button class="inventory-slot inventory-slot--empty" data-slot-index="0" type="button">
+            <span class="inventory-slot__index">1</span>
+            <span class="inventory-slot__rarity"></span>
+            <span class="inventory-slot__icon">-</span>
+            <span class="inventory-slot__name">TOM</span>
+          </button>
+          <button class="inventory-slot inventory-slot--empty" data-slot-index="1" type="button">
+            <span class="inventory-slot__index">2</span>
+            <span class="inventory-slot__rarity"></span>
+            <span class="inventory-slot__icon">-</span>
+            <span class="inventory-slot__name">TOM</span>
+          </button>
+          <button class="inventory-slot inventory-slot--empty" data-slot-index="2" type="button">
+            <span class="inventory-slot__index">3</span>
+            <span class="inventory-slot__rarity"></span>
+            <span class="inventory-slot__icon">-</span>
+            <span class="inventory-slot__name">TOM</span>
+          </button>
+        </div>
+      </section>
+
       <div class="reticle" aria-hidden="true"></div>
+      <div id="hitmarker" class="hitmarker hidden" aria-hidden="true"></div>
+      <section id="loot-toast" class="loot-toast hidden" aria-live="assertive">
+        <span id="loot-toast-rarity" class="loot-toast__rarity">GRÅ</span>
+        <strong id="loot-toast-name">ASSAULT RIFLE</strong>
+      </section>
 
       <section id="network-card" class="network-card hidden" aria-live="polite">
         <p class="label">Multiplayer</p>

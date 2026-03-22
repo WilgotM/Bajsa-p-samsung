@@ -655,10 +655,234 @@ body.staging-lobby #scene {
   box-shadow: 0 0 4px #000;
   pointer-events: none;
   z-index: 3;
+  transition: transform 0.08s ease, opacity 0.08s ease, width 0.08s ease, height 0.08s ease;
 }
 
 .hidden {
   display: none !important;
+}
+
+.interact-prompt {
+  position: absolute;
+  left: 50%;
+  bottom: 8.3rem;
+  transform: translateX(-50%);
+  z-index: 7;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 0.8rem 1rem;
+  min-width: min(30rem, 86vw);
+  padding: 0.85rem 1rem;
+  border: 4px solid rgba(255, 255, 255, 0.9);
+  border-radius: 16px;
+  background: rgba(10, 12, 15, 0.8);
+  box-shadow: 0 16px 28px rgba(0, 0, 0, 0.38);
+  backdrop-filter: blur(8px);
+  pointer-events: none;
+}
+
+.interact-prompt__key {
+  grid-row: span 2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 3rem;
+  height: 3rem;
+  border-radius: 12px;
+  background: var(--fn-yellow);
+  color: #111;
+  font-family: "Luckiest Guy", cursive;
+  font-size: 1.5rem;
+  border: 3px solid rgba(0, 0, 0, 0.9);
+}
+
+.interact-prompt__copy {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.interact-prompt__copy strong {
+  color: #fff;
+  font-family: "Luckiest Guy", cursive;
+  font-size: 1.25rem;
+  letter-spacing: 1px;
+  text-shadow: 2px 2px 0 rgba(0, 0, 0, 0.85);
+}
+
+.interact-prompt__copy span {
+  color: rgba(255, 255, 255, 0.82);
+  font-weight: 800;
+  font-size: 0.95rem;
+  letter-spacing: 0.08em;
+}
+
+.interact-prompt__track {
+  grid-column: 2;
+  height: 0.8rem;
+  border-radius: 999px;
+  overflow: hidden;
+  border: 2px solid rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.interact-prompt__fill {
+  width: 0%;
+  height: 100%;
+  background: linear-gradient(90deg, #fcee0a, #ffb347);
+  transition: width 0.04s linear;
+}
+
+.inventory-hud {
+  position: absolute;
+  right: 1.35rem;
+  bottom: 1.2rem;
+  z-index: 8;
+  pointer-events: none;
+}
+
+.inventory-hud__slots {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.inventory-slot {
+  position: relative;
+  width: min(9.4rem, 26vw);
+  min-height: 6.8rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 0.35rem;
+  padding: 0.75rem 0.75rem 0.65rem;
+  border: 4px solid rgba(255, 255, 255, 0.78);
+  border-radius: 14px;
+  background:
+    linear-gradient(180deg, rgba(38, 42, 52, 0.98), rgba(10, 12, 16, 0.96));
+  box-shadow:
+    0 16px 24px rgba(0, 0, 0, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  color: #fff;
+  text-align: left;
+  pointer-events: auto;
+}
+
+.inventory-slot__index {
+  position: absolute;
+  top: 0.4rem;
+  right: 0.5rem;
+  color: rgba(255, 255, 255, 0.72);
+  font-weight: 900;
+  font-size: 0.9rem;
+}
+
+.inventory-slot__rarity {
+  position: absolute;
+  inset: 0;
+  border-radius: 10px;
+  box-shadow: inset 0 -0.65rem 0 0 var(--rarity-color, #8b939d);
+  opacity: 0.9;
+  pointer-events: none;
+}
+
+.inventory-slot__icon {
+  position: absolute;
+  top: 1rem;
+  left: 0.8rem;
+  font-family: "Luckiest Guy", cursive;
+  font-size: 2rem;
+  letter-spacing: 0.06em;
+  color: rgba(255, 255, 255, 0.92);
+  text-shadow: 2px 2px 0 rgba(0, 0, 0, 0.85);
+}
+
+.inventory-slot__name {
+  position: relative;
+  z-index: 1;
+  font-family: "Luckiest Guy", cursive;
+  font-size: 0.95rem;
+  letter-spacing: 0.08em;
+  text-shadow: 2px 2px 0 rgba(0, 0, 0, 0.85);
+}
+
+.inventory-slot--selected {
+  transform: translateY(-0.35rem) scale(1.03);
+  border-color: #fff8b0;
+  box-shadow:
+    0 22px 28px rgba(0, 0, 0, 0.42),
+    0 0 0 4px rgba(255, 232, 102, 0.32),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+
+.inventory-slot--empty {
+  opacity: 0.85;
+}
+
+.inventory-slot--gray { --rarity-color: #8b939d; }
+.inventory-slot--green { --rarity-color: #4caf50; }
+.inventory-slot--blue { --rarity-color: #2f89ff; }
+.inventory-slot--purple { --rarity-color: #b25cff; }
+
+.hitmarker {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 2rem;
+  height: 2rem;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  z-index: 9;
+}
+
+.hitmarker::before,
+.hitmarker::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(45deg, transparent 47%, #fff 47%, #fff 53%, transparent 53%),
+    linear-gradient(-45deg, transparent 47%, #fff 47%, #fff 53%, transparent 53%);
+  filter: drop-shadow(0 0 4px rgba(0, 0, 0, 0.85));
+}
+
+.loot-toast {
+  position: absolute;
+  left: 50%;
+  bottom: 11.8rem;
+  transform: translateX(-50%);
+  z-index: 9;
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  padding: 0.75rem 1.05rem;
+  background: rgba(8, 10, 14, 0.92);
+  border: 3px solid rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.28);
+  pointer-events: none;
+}
+
+.loot-toast__rarity {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 4rem;
+  padding: 0.32rem 0.55rem;
+  border-radius: 999px;
+  background: var(--rarity-color, #8b939d);
+  color: #fff;
+  font-family: "Luckiest Guy", cursive;
+  font-size: 0.85rem;
+  letter-spacing: 0.08em;
+}
+
+.loot-toast strong {
+  font-family: "Luckiest Guy", cursive;
+  color: #fff;
+  font-size: 1rem;
+  letter-spacing: 0.08em;
+  text-shadow: 2px 2px 0 rgba(0, 0, 0, 0.82);
 }
 
 .announcement-banner {

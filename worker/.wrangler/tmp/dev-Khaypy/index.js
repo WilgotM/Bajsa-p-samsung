@@ -16,6 +16,10 @@ var COUNTDOWN_DURATION_MS = 1e4;
 var BUS_FLIGHT_DURATION_MS = 28e3;
 var BUS_DOORS_OPEN_OFFSET_MS = 2500;
 var BUS_AUTO_DROP_OFFSET_MS = 24e3;
+var WEAPON_SLOT_COUNT = 3;
+var TOILET_SEARCH_DURATION_MS = 850;
+var TOILET_INTERACT_RANGE = 4.6;
+var GROUND_LOOT_PICKUP_RANGE = 3.6;
 var MATCH_PHASES = Object.freeze({
   staging: "staging",
   countdown: "countdown",
@@ -52,10 +56,143 @@ var ACTION_KINDS = Object.freeze({
   poopStop: "poop-stop",
   strike: "strike"
 });
+var INTERACT_KINDS = Object.freeze({
+  searchStart: "search-start",
+  searchCancel: "search-cancel",
+  pickupGroundLoot: "pickup-ground-loot"
+});
+var COMBAT_EVENT_KINDS = Object.freeze({
+  weaponFired: "weapon-fired",
+  weaponHit: "weapon-hit",
+  playerEliminated: "player-eliminated"
+});
 var WORLD_EVENT_KINDS = Object.freeze({
   targetHit: "target-hit",
   playerHit: "player-hit"
 });
+var WEAPON_TYPES = Object.freeze({
+  assaultRifle: "assault-rifle",
+  shotgun: "pump-shotgun",
+  smg: "smg"
+});
+var WEAPON_RARITIES = Object.freeze({
+  gray: "gray",
+  green: "green",
+  blue: "blue",
+  purple: "purple"
+});
+var WEAPON_RARITY_ORDER = Object.freeze([
+  WEAPON_RARITIES.gray,
+  WEAPON_RARITIES.green,
+  WEAPON_RARITIES.blue,
+  WEAPON_RARITIES.purple
+]);
+var WEAPON_RARITY_COLORS = Object.freeze({
+  [WEAPON_RARITIES.gray]: "#8b939d",
+  [WEAPON_RARITIES.green]: "#4caf50",
+  [WEAPON_RARITIES.blue]: "#2f89ff",
+  [WEAPON_RARITIES.purple]: "#b25cff"
+});
+var WEAPON_TYPE_LABELS = Object.freeze({
+  [WEAPON_TYPES.assaultRifle]: "ASSAULT RIFLE",
+  [WEAPON_TYPES.shotgun]: "PUMP SHOTGUN",
+  [WEAPON_TYPES.smg]: "SMG"
+});
+var WEAPON_DEFINITIONS = Object.freeze({
+  [WEAPON_TYPES.assaultRifle]: Object.freeze({
+    fireRate: 6.5,
+    damage: Object.freeze({
+      [WEAPON_RARITIES.gray]: 22,
+      [WEAPON_RARITIES.green]: 24,
+      [WEAPON_RARITIES.blue]: 26,
+      [WEAPON_RARITIES.purple]: 28
+    }),
+    spread: Object.freeze({
+      [WEAPON_RARITIES.gray]: 0.038,
+      [WEAPON_RARITIES.green]: 0.034,
+      [WEAPON_RARITIES.blue]: 0.03,
+      [WEAPON_RARITIES.purple]: 0.026
+    }),
+    recoilKick: Object.freeze({
+      [WEAPON_RARITIES.gray]: 0.014,
+      [WEAPON_RARITIES.green]: 0.013,
+      [WEAPON_RARITIES.blue]: 0.012,
+      [WEAPON_RARITIES.purple]: 0.011
+    }),
+    maxRange: 78,
+    impactScale: 1,
+    pellets: 1
+  }),
+  [WEAPON_TYPES.shotgun]: Object.freeze({
+    fireRate: 0.85,
+    damage: Object.freeze({
+      [WEAPON_RARITIES.gray]: 9,
+      [WEAPON_RARITIES.green]: 10,
+      [WEAPON_RARITIES.blue]: 11,
+      [WEAPON_RARITIES.purple]: 12
+    }),
+    spread: Object.freeze({
+      [WEAPON_RARITIES.gray]: 0.16,
+      [WEAPON_RARITIES.green]: 0.148,
+      [WEAPON_RARITIES.blue]: 0.136,
+      [WEAPON_RARITIES.purple]: 0.124
+    }),
+    recoilKick: Object.freeze({
+      [WEAPON_RARITIES.gray]: 0.028,
+      [WEAPON_RARITIES.green]: 0.026,
+      [WEAPON_RARITIES.blue]: 0.024,
+      [WEAPON_RARITIES.purple]: 0.022
+    }),
+    maxRange: 19,
+    impactScale: 1.25,
+    pellets: 8
+  }),
+  [WEAPON_TYPES.smg]: Object.freeze({
+    fireRate: 10.5,
+    damage: Object.freeze({
+      [WEAPON_RARITIES.gray]: 15,
+      [WEAPON_RARITIES.green]: 16,
+      [WEAPON_RARITIES.blue]: 17,
+      [WEAPON_RARITIES.purple]: 18
+    }),
+    spread: Object.freeze({
+      [WEAPON_RARITIES.gray]: 0.05,
+      [WEAPON_RARITIES.green]: 0.046,
+      [WEAPON_RARITIES.blue]: 0.042,
+      [WEAPON_RARITIES.purple]: 0.038
+    }),
+    recoilKick: Object.freeze({
+      [WEAPON_RARITIES.gray]: 0.012,
+      [WEAPON_RARITIES.green]: 0.011,
+      [WEAPON_RARITIES.blue]: 0.01,
+      [WEAPON_RARITIES.purple]: 9e-3
+    }),
+    maxRange: 46,
+    impactScale: 0.92,
+    pellets: 1
+  })
+});
+var WEAPON_RARITY_WEIGHTS = Object.freeze({
+  [WEAPON_RARITIES.gray]: 46,
+  [WEAPON_RARITIES.green]: 30,
+  [WEAPON_RARITIES.blue]: 17,
+  [WEAPON_RARITIES.purple]: 7
+});
+var WEAPON_TYPE_WEIGHTS = Object.freeze({
+  [WEAPON_TYPES.assaultRifle]: 45,
+  [WEAPON_TYPES.smg]: 35,
+  [WEAPON_TYPES.shotgun]: 20
+});
+var TOILET_SPAWNS = Object.freeze([
+  Object.freeze({ id: "toilet-town-west-shop", x: -26.8, y: 0, z: 40.6, yaw: Math.PI / 2 }),
+  Object.freeze({ id: "toilet-town-east-shop", x: 26.8, y: 0, z: 40.6, yaw: -Math.PI / 2 }),
+  Object.freeze({ id: "toilet-town-northwest-house", x: -16.6, y: 0, z: 57.2, yaw: Math.PI / 2 }),
+  Object.freeze({ id: "toilet-town-northeast-house", x: 16.6, y: 0, z: 57.2, yaw: -Math.PI / 2 }),
+  Object.freeze({ id: "toilet-forest-connector", x: 0, y: 0, z: -39.5, yaw: 0 }),
+  Object.freeze({ id: "toilet-desert-roadside", x: 40, y: 0, z: -6, yaw: -Math.PI / 2 }),
+  Object.freeze({ id: "toilet-snow-roadside", x: -40, y: 0, z: -5.4, yaw: Math.PI / 2 }),
+  Object.freeze({ id: "toilet-south-town-connector", x: 0, y: 0, z: 40.4, yaw: Math.PI })
+]);
 var PLAYER_COLOR_PALETTE = [
   "#d9823f",
   "#d85d4c",
@@ -111,6 +248,10 @@ function createActionState() {
   };
 }
 __name(createActionState, "createActionState");
+function createEmptyLoadout() {
+  return Array.from({ length: WEAPON_SLOT_COUNT }, () => null);
+}
+__name(createEmptyLoadout, "createEmptyLoadout");
 function createMatchState() {
   return {
     phase: MATCH_PHASES.staging,
@@ -239,7 +380,141 @@ function createGuestProfile(index) {
   };
 }
 __name(createGuestProfile, "createGuestProfile");
+function sanitizeVector3(value, fallback = { x: 0, y: 0, z: 0 }) {
+  return {
+    x: Number.isFinite(value?.x) ? value.x : fallback.x,
+    y: Number.isFinite(value?.y) ? value.y : fallback.y,
+    z: Number.isFinite(value?.z) ? value.z : fallback.z
+  };
+}
+__name(sanitizeVector3, "sanitizeVector3");
+function sanitizeDirection(value, fallback = { x: 0, y: 0, z: 1 }) {
+  const vector = sanitizeVector3(value, fallback);
+  const length = Math.hypot(vector.x, vector.y, vector.z);
+  if (!Number.isFinite(length) || length < 1e-4) {
+    return { ...fallback };
+  }
+  return {
+    x: vector.x / length,
+    y: vector.y / length,
+    z: vector.z / length
+  };
+}
+__name(sanitizeDirection, "sanitizeDirection");
+function clampNumber(value, min, max, fallback) {
+  if (!Number.isFinite(value)) {
+    return fallback;
+  }
+  return Math.min(Math.max(value, min), max);
+}
+__name(clampNumber, "clampNumber");
+function planarDistance(a, b) {
+  return Math.hypot((a?.x ?? 0) - (b?.x ?? 0), (a?.z ?? 0) - (b?.z ?? 0));
+}
+__name(planarDistance, "planarDistance");
+function copyWeaponStack(stack) {
+  if (!stack?.type || !stack?.rarity) {
+    return null;
+  }
+  return {
+    id: stack.id ?? crypto.randomUUID(),
+    type: stack.type,
+    rarity: stack.rarity
+  };
+}
+__name(copyWeaponStack, "copyWeaponStack");
+function createWeightedPicker(weights) {
+  const entries = Object.entries(weights);
+  const total = entries.reduce((sum, [, weight]) => sum + weight, 0);
+  return () => {
+    let roll = Math.random() * total;
+    for (const [key, weight] of entries) {
+      roll -= weight;
+      if (roll <= 0) {
+        return key;
+      }
+    }
+    return entries[entries.length - 1]?.[0] ?? "";
+  };
+}
+__name(createWeightedPicker, "createWeightedPicker");
+var pickWeaponType = createWeightedPicker(WEAPON_TYPE_WEIGHTS);
+var pickWeaponRarity = createWeightedPicker(WEAPON_RARITY_WEIGHTS);
+function createStarterLoadout() {
+  return [
+    {
+      id: crypto.randomUUID(),
+      type: WEAPON_TYPES.assaultRifle,
+      rarity: WEAPON_RARITIES.gray
+    },
+    {
+      id: crypto.randomUUID(),
+      type: WEAPON_TYPES.shotgun,
+      rarity: WEAPON_RARITIES.gray
+    },
+    {
+      id: crypto.randomUUID(),
+      type: WEAPON_TYPES.smg,
+      rarity: WEAPON_RARITIES.gray
+    }
+  ];
+}
+__name(createStarterLoadout, "createStarterLoadout");
+function getEquippedWeapon(player) {
+  const slot = clampNumber(player.equippedSlot, 0, WEAPON_SLOT_COUNT - 1, 0);
+  return player.loadout?.[slot] ?? null;
+}
+__name(getEquippedWeapon, "getEquippedWeapon");
+function serializeLoadout(player) {
+  return (player.loadout ?? createEmptyLoadout()).map(copyWeaponStack);
+}
+__name(serializeLoadout, "serializeLoadout");
+function serializeLoadoutState(player) {
+  return {
+    type: "loadout-state",
+    equippedSlot: clampNumber(player.equippedSlot, 0, WEAPON_SLOT_COUNT - 1, 0),
+    slots: serializeLoadout(player)
+  };
+}
+__name(serializeLoadoutState, "serializeLoadoutState");
+function serializeGroundLoot(groundLoot) {
+  return {
+    id: groundLoot.id,
+    type: groundLoot.weapon.type,
+    rarity: groundLoot.weapon.rarity,
+    position: sanitizeVector3(groundLoot.position),
+    sourceToiletId: groundLoot.sourceToiletId ?? null
+  };
+}
+__name(serializeGroundLoot, "serializeGroundLoot");
+function serializeToilet(toilet) {
+  return {
+    id: toilet.id,
+    position: sanitizeVector3(toilet.position),
+    yaw: toilet.yaw,
+    opened: Boolean(toilet.opened),
+    glowActive: Boolean(toilet.glowActive),
+    searchingPlayerId: toilet.searchingPlayerId ?? null,
+    searchEndsAt: toilet.searchEndsAt ?? null,
+    groundLootId: toilet.groundLootId ?? null
+  };
+}
+__name(serializeToilet, "serializeToilet");
+function serializeLootState(room) {
+  return {
+    type: "loot-state",
+    toilets: Array.from(room.toilets.values()).map(serializeToilet),
+    groundLoot: Array.from(room.groundLoot.values()).map(serializeGroundLoot)
+  };
+}
+__name(serializeLootState, "serializeLootState");
+function applyProfile(player, profile = {}) {
+  player.name = sanitizePlayerName(profile.name, player.name);
+  player.skinDataUrl = sanitizeSkinDataUrl(profile.skinDataUrl, player.skinDataUrl ?? "");
+}
+__name(applyProfile, "applyProfile");
 function serializePlayerSnapshot(player) {
+  const equippedWeapon = getEquippedWeapon(player);
   return {
     id: player.id,
     name: player.name,
@@ -249,23 +524,93 @@ function serializePlayerSnapshot(player) {
     pose: player.pose,
     actionState: player.actionState,
     ready: Boolean(player.ready),
-    playerPhase: player.playerPhase
+    playerPhase: player.playerPhase,
+    equippedSlot: clampNumber(player.equippedSlot, 0, WEAPON_SLOT_COUNT - 1, 0),
+    equippedWeaponType: equippedWeapon?.type ?? "",
+    equippedWeaponRarity: equippedWeapon?.rarity ?? "",
+    isSearching: Boolean(player.isSearching)
   };
 }
 __name(serializePlayerSnapshot, "serializePlayerSnapshot");
-function applyProfile(player, profile = {}) {
-  player.name = sanitizePlayerName(profile.name, player.name);
-  player.skinDataUrl = sanitizeSkinDataUrl(profile.skinDataUrl, player.skinDataUrl ?? "");
-}
-__name(applyProfile, "applyProfile");
-function sanitizeVector3(value, fallback = { x: 0, y: 0, z: 0 }) {
+function createPlayerState({
+  id,
+  name,
+  color,
+  skinDataUrl = "",
+  pose,
+  actionState,
+  websocket,
+  joined = false,
+  guestIndex = 0,
+  ready = false,
+  playerPhase = MATCH_PHASES.staging,
+  loadout = createStarterLoadout(),
+  equippedSlot = 0,
+  isSearching = false,
+  searchingToiletId = null,
+  serverHemorrhoids = 0,
+  lastWeaponFireAt = 0
+}) {
   return {
-    x: Number.isFinite(value?.x) ? value.x : fallback.x,
-    y: Number.isFinite(value?.y) ? value.y : fallback.y,
-    z: Number.isFinite(value?.z) ? value.z : fallback.z
+    id,
+    name,
+    color,
+    skinDataUrl,
+    pose,
+    actionState,
+    websocket,
+    joined,
+    guestIndex,
+    ready,
+    playerPhase,
+    loadout: loadout.map(copyWeaponStack),
+    equippedSlot,
+    isSearching,
+    searchingToiletId,
+    serverHemorrhoids,
+    lastWeaponFireAt
   };
 }
-__name(sanitizeVector3, "sanitizeVector3");
+__name(createPlayerState, "createPlayerState");
+function raySphereDistance(origin, direction, center, radius, maxDistance) {
+  const ocX = origin.x - center.x;
+  const ocY = origin.y - center.y;
+  const ocZ = origin.z - center.z;
+  const b = ocX * direction.x + ocY * direction.y + ocZ * direction.z;
+  const c = ocX * ocX + ocY * ocY + ocZ * ocZ - radius * radius;
+  const discriminant = b * b - c;
+  if (discriminant < 0) {
+    return null;
+  }
+  const sqrt = Math.sqrt(discriminant);
+  const near = -b - sqrt;
+  const far = -b + sqrt;
+  const distance = near >= 0 ? near : far >= 0 ? far : null;
+  if (distance === null || distance > maxDistance) {
+    return null;
+  }
+  return distance;
+}
+__name(raySphereDistance, "raySphereDistance");
+function jitterDirection(direction, spread, random) {
+  const jittered = {
+    x: direction.x + (random() - 0.5) * spread,
+    y: direction.y + (random() - 0.5) * spread,
+    z: direction.z + (random() - 0.5) * spread
+  };
+  return sanitizeDirection(jittered, direction);
+}
+__name(jitterDirection, "jitterDirection");
+function createSeededRandom(seed) {
+  let value = seed >>> 0;
+  return () => {
+    value += 1831565813;
+    let result = Math.imul(value ^ value >>> 15, value | 1);
+    result ^= result + Math.imul(result ^ result >>> 7, result | 61);
+    return ((result ^ result >>> 14) >>> 0) / 4294967296;
+  };
+}
+__name(createSeededRandom, "createSeededRandom");
 async function fetchLobbyStatus(env, lobbyId) {
   const stub = env.LOBBY_ROOM.get(env.LOBBY_ROOM.idFromName(lobbyId));
   const response = await stub.fetch("https://lobby.internal/status");
@@ -323,7 +668,11 @@ var LobbyRoom = class {
     this.guestCounter = 0;
     this.matchState = createMatchState();
     this.phaseTimer = null;
+    this.toilets = /* @__PURE__ */ new Map();
+    this.groundLoot = /* @__PURE__ */ new Map();
+    this.searchTimers = /* @__PURE__ */ new Map();
     this.restorePlayers();
+    this.resetLootState();
     this.schedulePhaseTimer();
   }
   restorePlayers() {
@@ -333,21 +682,44 @@ var LobbyRoom = class {
         continue;
       }
       this.lobbyId = attachment.lobbyId;
-      this.players.set(attachment.playerId, {
-        id: attachment.playerId,
-        name: attachment.name,
-        color: attachment.color,
-        skinDataUrl: attachment.skinDataUrl ?? "",
-        pose: attachment.pose ?? createSpawnPose(attachment.playerPhase),
-        actionState: attachment.actionState ?? createActionState(),
-        websocket,
-        joined: attachment.joined ?? false,
-        guestIndex: attachment.guestIndex ?? 0,
-        ready: attachment.ready ?? false,
-        playerPhase: attachment.playerPhase ?? MATCH_PHASES.staging
-      });
-      this.guestCounter = Math.max(this.guestCounter, attachment.guestIndex + 1);
+      this.players.set(
+        attachment.playerId,
+        createPlayerState({
+          id: attachment.playerId,
+          name: attachment.name,
+          color: attachment.color,
+          skinDataUrl: attachment.skinDataUrl ?? "",
+          pose: attachment.pose ?? createSpawnPose(attachment.playerPhase),
+          actionState: attachment.actionState ?? createActionState(),
+          websocket,
+          joined: attachment.joined ?? false,
+          guestIndex: attachment.guestIndex ?? 0,
+          ready: attachment.ready ?? false,
+          playerPhase: attachment.playerPhase ?? MATCH_PHASES.staging,
+          loadout: attachment.loadout ?? createStarterLoadout(),
+          equippedSlot: attachment.equippedSlot ?? 0,
+          isSearching: false,
+          searchingToiletId: null,
+          serverHemorrhoids: attachment.serverHemorrhoids ?? 0,
+          lastWeaponFireAt: attachment.lastWeaponFireAt ?? 0
+        })
+      );
+      this.guestCounter = Math.max(this.guestCounter, (attachment.guestIndex ?? 0) + 1);
     }
+  }
+  resetLootState() {
+    this.clearSearchTimers();
+    this.toilets.clear();
+    this.groundLoot.clear();
+  }
+  resetPlayerCombatState(player) {
+    player.loadout = createStarterLoadout();
+    player.equippedSlot = 0;
+    player.isSearching = false;
+    player.searchingToiletId = null;
+    player.serverHemorrhoids = 0;
+    player.lastWeaponFireAt = 0;
+    this.updateAttachment(player);
   }
   async fetch(request) {
     const url = new URL(request.url);
@@ -375,11 +747,10 @@ var LobbyRoom = class {
       const server = pair[1];
       const playerPhase = this.getInitialPlayerPhase();
       this.ctx.acceptWebSocket(server);
-      const player = {
+      const player = createPlayerState({
         id: playerId,
         name: profile.name,
         color: profile.color,
-        skinDataUrl: "",
         pose: createSpawnPose(playerPhase),
         actionState: createActionState(),
         websocket: server,
@@ -387,7 +758,7 @@ var LobbyRoom = class {
         guestIndex,
         ready: false,
         playerPhase
-      };
+      });
       this.players.set(playerId, player);
       this.guestCounter += 1;
       this.updateAttachment(player);
@@ -449,6 +820,18 @@ var LobbyRoom = class {
       this.handleAction(player, payload.action);
       return;
     }
+    if (payload.type === "interact") {
+      this.handleInteract(player, payload.interact);
+      return;
+    }
+    if (payload.type === "equip-slot") {
+      this.handleEquipSlot(player, payload.slot);
+      return;
+    }
+    if (payload.type === "fire-weapon") {
+      this.handleFireWeapon(player, payload);
+      return;
+    }
     if (payload.type === "world-event") {
       this.handleWorldEvent(player, payload.event);
     }
@@ -471,6 +854,10 @@ var LobbyRoom = class {
     applyProfile(player, profile);
     player.joined = true;
     player.playerPhase = this.getInitialPlayerPhase();
+    if (!(player.loadout ?? []).some((weapon) => weapon?.type && weapon?.rarity)) {
+      player.loadout = createStarterLoadout();
+      player.equippedSlot = 0;
+    }
     if (!player.pose) {
       player.pose = createSpawnPose(player.playerPhase);
     }
@@ -499,15 +886,9 @@ var LobbyRoom = class {
         matchState: this.serializeMatchState()
       })
     );
-    this.broadcast(
-      {
-        type: "presence",
-        action: "join",
-        playerCount: this.getJoinedPlayerCount(),
-        player: serializePlayerSnapshot(player)
-      },
-      player.id
-    );
+    this.sendToPlayer(player, serializeLootState(this));
+    this.sendToPlayer(player, serializeLoadoutState(player));
+    this.broadcastPresenceUpdate(player, player.id === null ? null : player.id);
     this.reconcileMatchState(true);
   }
   handleProfile(player, profile) {
@@ -521,12 +902,7 @@ var LobbyRoom = class {
       return;
     }
     this.updateAttachment(player);
-    this.broadcast({
-      type: "presence",
-      action: "update",
-      playerCount: this.getJoinedPlayerCount(),
-      player: serializePlayerSnapshot(player)
-    });
+    this.broadcastPresenceUpdate(player);
     this.broadcastMatchState();
   }
   handleReady(player, ready) {
@@ -556,6 +932,7 @@ var LobbyRoom = class {
     if (nextPhase === MATCH_PHASES.active && this.matchState.phase !== MATCH_PHASES.bus && this.matchState.phase !== MATCH_PHASES.active) {
       return;
     }
+    this.cancelPlayerSearch(player);
     player.playerPhase = nextPhase;
     player.ready = false;
     player.actionState.poopActive = false;
@@ -609,6 +986,167 @@ var LobbyRoom = class {
       player.id
     );
   }
+  handleInteract(player, interact) {
+    if (!player.joined || !interact?.kind) {
+      return;
+    }
+    if (interact.kind === INTERACT_KINDS.searchStart) {
+      this.startToiletSearch(player, interact.toiletId);
+      return;
+    }
+    if (interact.kind === INTERACT_KINDS.searchCancel) {
+      this.cancelPlayerSearch(player);
+      return;
+    }
+    if (interact.kind === INTERACT_KINDS.pickupGroundLoot) {
+      this.pickupGroundLoot(player, interact.groundLootId);
+    }
+  }
+  handleEquipSlot(player, slot) {
+    if (!player.joined) {
+      return;
+    }
+    const nextSlot = clampNumber(slot, 0, WEAPON_SLOT_COUNT - 1, -1);
+    if (nextSlot < 0) {
+      return;
+    }
+    player.equippedSlot = nextSlot;
+    this.updateAttachment(player);
+    this.sendToPlayer(player, serializeLoadoutState(player));
+    this.broadcastPresenceUpdate(player);
+  }
+  handleFireWeapon(player, payload) {
+    if (!player.joined || player.playerPhase !== MATCH_PHASES.active) {
+      return;
+    }
+    const weapon = getEquippedWeapon(player);
+    if (!weapon) {
+      return;
+    }
+    const definition = WEAPON_DEFINITIONS[weapon.type];
+    const rarityStats = definition?.damage?.[weapon.rarity];
+    if (!definition || !Number.isFinite(rarityStats)) {
+      return;
+    }
+    const now = Date.now();
+    const minInterval = 1e3 / definition.fireRate;
+    if (now - player.lastWeaponFireAt < minInterval * 0.92) {
+      return;
+    }
+    const fallbackOrigin = {
+      x: player.pose.x,
+      y: player.pose.y + 1.05,
+      z: player.pose.z
+    };
+    const origin = sanitizeVector3(payload.origin, fallbackOrigin);
+    if (Math.hypot(origin.x - fallbackOrigin.x, origin.y - fallbackOrigin.y, origin.z - fallbackOrigin.z) > 4.2) {
+      return;
+    }
+    const fallbackDirection = {
+      x: Math.sin(player.pose.yaw),
+      y: 0,
+      z: Math.cos(player.pose.yaw)
+    };
+    const direction = sanitizeDirection(payload.direction, fallbackDirection);
+    const random = createSeededRandom((payload.seed ?? now) >>> 0);
+    const hitsByTarget = /* @__PURE__ */ new Map();
+    let furthestImpact = {
+      x: origin.x + direction.x * definition.maxRange,
+      y: origin.y + direction.y * definition.maxRange,
+      z: origin.z + direction.z * definition.maxRange
+    };
+    for (let pelletIndex = 0; pelletIndex < definition.pellets; pelletIndex += 1) {
+      const pelletDirection = definition.pellets === 1 ? direction : jitterDirection(direction, definition.spread[weapon.rarity], random);
+      let bestHit = null;
+      for (const target of this.getJoinedPlayers()) {
+        if (target.id === player.id || target.playerPhase !== MATCH_PHASES.active) {
+          continue;
+        }
+        const center = {
+          x: target.pose.x,
+          y: target.pose.y + 0.95,
+          z: target.pose.z
+        };
+        const hitDistance = raySphereDistance(origin, pelletDirection, center, 0.78, definition.maxRange);
+        if (!Number.isFinite(hitDistance)) {
+          continue;
+        }
+        if (!bestHit || hitDistance < bestHit.distance) {
+          bestHit = {
+            target,
+            distance: hitDistance,
+            impactPoint: {
+              x: origin.x + pelletDirection.x * hitDistance,
+              y: origin.y + pelletDirection.y * hitDistance,
+              z: origin.z + pelletDirection.z * hitDistance
+            },
+            pelletDirection
+          };
+        }
+      }
+      if (!bestHit) {
+        continue;
+      }
+      furthestImpact = bestHit.impactPoint;
+      const existing = hitsByTarget.get(bestHit.target.id) ?? {
+        target: bestHit.target,
+        damage: 0,
+        pellets: 0,
+        impactPoint: bestHit.impactPoint
+      };
+      existing.damage += definition.damage[weapon.rarity];
+      existing.pellets += 1;
+      existing.impactPoint = bestHit.impactPoint;
+      hitsByTarget.set(bestHit.target.id, existing);
+    }
+    player.lastWeaponFireAt = now;
+    this.updateAttachment(player);
+    this.broadcast({
+      type: "combat-event",
+      kind: COMBAT_EVENT_KINDS.weaponFired,
+      playerId: player.id,
+      event: {
+        weaponType: weapon.type,
+        weaponRarity: weapon.rarity,
+        origin,
+        impactPoint: furthestImpact,
+        at: now
+      }
+    }, player.id);
+    for (const hit of hitsByTarget.values()) {
+      const nextHemorrhoids = Math.min(100, hit.target.serverHemorrhoids + hit.damage);
+      hit.target.serverHemorrhoids = nextHemorrhoids;
+      this.updateAttachment(hit.target);
+      this.broadcast({
+        type: "combat-event",
+        kind: COMBAT_EVENT_KINDS.weaponHit,
+        playerId: player.id,
+        event: {
+          targetPlayerId: hit.target.id,
+          weaponType: weapon.type,
+          weaponRarity: weapon.rarity,
+          damage: hit.damage,
+          pellets: hit.pellets,
+          impactPoint: sanitizeVector3(hit.impactPoint),
+          at: now,
+          nextHemorrhoids
+        }
+      });
+      if (nextHemorrhoids >= 100) {
+        this.broadcast({
+          type: "combat-event",
+          kind: COMBAT_EVENT_KINDS.playerEliminated,
+          playerId: player.id,
+          event: {
+            targetPlayerId: hit.target.id,
+            weaponType: weapon.type,
+            weaponRarity: weapon.rarity,
+            at: now
+          }
+        });
+      }
+    }
+  }
   handleWorldEvent(player, event) {
     if (!player.joined || !event?.kind) {
       return;
@@ -661,11 +1199,184 @@ var LobbyRoom = class {
       player.id
     );
   }
+  startToiletSearch(player, toiletId) {
+    if (!player.joined || player.playerPhase !== MATCH_PHASES.active) {
+      return;
+    }
+    const toilet = this.toilets.get(toiletId);
+    if (!toilet || toilet.opened || !toilet.weapon || toilet.searchingPlayerId) {
+      return;
+    }
+    if (planarDistance(player.pose, toilet.position) > TOILET_INTERACT_RANGE) {
+      return;
+    }
+    this.cancelPlayerSearch(player);
+    player.isSearching = true;
+    player.searchingToiletId = toilet.id;
+    toilet.searchingPlayerId = player.id;
+    toilet.searchEndsAt = Date.now() + TOILET_SEARCH_DURATION_MS;
+    this.updateAttachment(player);
+    const timerId = setTimeout(() => {
+      this.searchTimers.delete(toilet.id);
+      this.completeToiletSearch(toilet.id, player.id);
+    }, TOILET_SEARCH_DURATION_MS);
+    this.searchTimers.set(toilet.id, timerId);
+    this.broadcastPresenceUpdate(player);
+    this.broadcast({
+      type: "loot-event",
+      kind: "toilet-search-start",
+      toilet: serializeToilet(toilet),
+      playerId: player.id
+    });
+  }
+  cancelPlayerSearch(player) {
+    if (!player?.isSearching || !player.searchingToiletId) {
+      return;
+    }
+    const toilet = this.toilets.get(player.searchingToiletId);
+    if (toilet) {
+      const timerId = this.searchTimers.get(toilet.id);
+      if (timerId) {
+        clearTimeout(timerId);
+        this.searchTimers.delete(toilet.id);
+      }
+      toilet.searchingPlayerId = null;
+      toilet.searchEndsAt = null;
+      this.broadcast({
+        type: "loot-event",
+        kind: "toilet-search-cancel",
+        toilet: serializeToilet(toilet),
+        playerId: player.id
+      });
+    }
+    player.isSearching = false;
+    player.searchingToiletId = null;
+    this.updateAttachment(player);
+    this.broadcastPresenceUpdate(player);
+  }
+  completeToiletSearch(toiletId, playerId) {
+    const toilet = this.toilets.get(toiletId);
+    const player = this.players.get(playerId);
+    if (!toilet || !player || toilet.searchingPlayerId !== playerId || !toilet.weapon) {
+      return;
+    }
+    if (!player.joined || player.playerPhase !== MATCH_PHASES.active || planarDistance(player.pose, toilet.position) > TOILET_INTERACT_RANGE) {
+      this.cancelPlayerSearch(player);
+      return;
+    }
+    const searchedWeapon = copyWeaponStack(toilet.weapon);
+    let targetSlot = player.loadout.findIndex((entry) => !entry);
+    let groundLoot = null;
+    let autoCollected = false;
+    if (targetSlot >= 0) {
+      player.loadout[targetSlot] = copyWeaponStack(searchedWeapon);
+      player.equippedSlot = targetSlot;
+      autoCollected = true;
+      this.sendToPlayer(player, serializeLoadoutState(player));
+    } else {
+      const direction = {
+        x: Math.sin(toilet.yaw ?? 0),
+        z: Math.cos(toilet.yaw ?? 0)
+      };
+      groundLoot = {
+        id: crypto.randomUUID(),
+        weapon: copyWeaponStack(searchedWeapon),
+        position: {
+          x: toilet.position.x + direction.x * 1.1,
+          y: toilet.position.y + 0.16,
+          z: toilet.position.z + direction.z * 1.1
+        },
+        sourceToiletId: toilet.id
+      };
+      this.groundLoot.set(groundLoot.id, groundLoot);
+    }
+    toilet.weapon = null;
+    toilet.opened = true;
+    toilet.glowActive = false;
+    toilet.searchingPlayerId = null;
+    toilet.searchEndsAt = null;
+    toilet.groundLootId = groundLoot?.id ?? null;
+    player.isSearching = false;
+    player.searchingToiletId = null;
+    this.updateAttachment(player);
+    this.broadcastPresenceUpdate(player);
+    this.broadcast({
+      type: "loot-event",
+      kind: "toilet-search-complete",
+      toilet: serializeToilet(toilet),
+      playerId,
+      autoCollected,
+      targetSlot: targetSlot >= 0 ? targetSlot : null,
+      pickedWeapon: searchedWeapon,
+      groundLoot: groundLoot ? serializeGroundLoot(groundLoot) : null
+    });
+  }
+  pickupGroundLoot(player, groundLootId) {
+    if (!player.joined || player.playerPhase !== MATCH_PHASES.active) {
+      return;
+    }
+    const groundLoot = this.groundLoot.get(groundLootId);
+    if (!groundLoot) {
+      return;
+    }
+    if (planarDistance(player.pose, groundLoot.position) > GROUND_LOOT_PICKUP_RANGE) {
+      return;
+    }
+    let targetSlot = player.loadout.findIndex((entry) => !entry);
+    if (targetSlot < 0) {
+      targetSlot = clampNumber(player.equippedSlot, 0, WEAPON_SLOT_COUNT - 1, 0);
+    }
+    const replaced = copyWeaponStack(player.loadout[targetSlot]);
+    player.loadout[targetSlot] = copyWeaponStack(groundLoot.weapon);
+    if (!getEquippedWeapon(player)) {
+      player.equippedSlot = targetSlot;
+    } else if (targetSlot === player.equippedSlot || !player.loadout[player.equippedSlot]) {
+      player.equippedSlot = targetSlot;
+    }
+    this.groundLoot.delete(groundLoot.id);
+    if (groundLoot.sourceToiletId) {
+      const toilet = this.toilets.get(groundLoot.sourceToiletId);
+      if (toilet?.groundLootId === groundLoot.id) {
+        toilet.groundLootId = null;
+      }
+    }
+    let droppedGroundLoot = null;
+    if (replaced) {
+      const dropDirection = {
+        x: Math.sin(player.pose.yaw),
+        z: Math.cos(player.pose.yaw)
+      };
+      droppedGroundLoot = {
+        id: crypto.randomUUID(),
+        weapon: replaced,
+        position: {
+          x: player.pose.x + dropDirection.x * 1.1,
+          y: player.pose.y + 0.16,
+          z: player.pose.z + dropDirection.z * 1.1
+        },
+        sourceToiletId: null
+      };
+      this.groundLoot.set(droppedGroundLoot.id, droppedGroundLoot);
+    }
+    this.updateAttachment(player);
+    this.sendToPlayer(player, serializeLoadoutState(player));
+    this.broadcastPresenceUpdate(player);
+    this.broadcast({
+      type: "loot-event",
+      kind: "ground-loot-picked-up",
+      playerId: player.id,
+      pickedWeapon: copyWeaponStack(player.loadout[targetSlot]),
+      targetSlot,
+      removedGroundLootId: groundLoot.id,
+      addedGroundLoot: droppedGroundLoot ? serializeGroundLoot(droppedGroundLoot) : null
+    });
+  }
   removePlayer(websocket) {
     const player = this.findPlayerBySocket(websocket);
     if (!player) {
       return;
     }
+    this.cancelPlayerSearch(player);
     this.players.delete(player.id);
     if (player.joined) {
       this.broadcast({
@@ -677,9 +1388,11 @@ var LobbyRoom = class {
     }
     if (this.players.size === 0) {
       this.clearPhaseTimer();
+      this.clearSearchTimers();
       this.guestCounter = 0;
       this.lobbyId = null;
       this.matchState = createMatchState();
+      this.resetLootState();
       return;
     }
     this.reconcileMatchState(true);
@@ -743,12 +1456,16 @@ var LobbyRoom = class {
   }
   startBusPhase() {
     this.matchState = getBusSchedule(Date.now());
+    this.resetLootState();
     this.applyPlayerPhaseToJoinedPlayers(MATCH_PHASES.bus);
     for (const player of this.getJoinedPlayers()) {
+      this.cancelPlayerSearch(player);
       player.ready = false;
       player.actionState.poopActive = false;
-      this.updateAttachment(player);
+      this.resetPlayerCombatState(player);
+      this.sendToPlayer(player, serializeLoadoutState(player));
     }
+    this.broadcast(serializeLootState(this));
     this.broadcastMatchState();
     this.schedulePhaseTimer();
   }
@@ -807,6 +1524,23 @@ var LobbyRoom = class {
       ...this.serializeMatchState()
     });
   }
+  sendToPlayer(player, message) {
+    if (!player?.joined) {
+      return;
+    }
+    player.websocket.send(JSON.stringify(message));
+  }
+  broadcastPresenceUpdate(player, excludedPlayerId = null) {
+    this.broadcast(
+      {
+        type: "presence",
+        action: "update",
+        playerCount: this.getJoinedPlayerCount(),
+        player: serializePlayerSnapshot(player)
+      },
+      excludedPlayerId
+    );
+  }
   schedulePhaseTimer() {
     this.clearPhaseTimer();
     const targetTime = this.matchState.phase === MATCH_PHASES.countdown ? this.matchState.countdownEndsAt : this.matchState.phase === MATCH_PHASES.bus ? this.matchState.busEndsAt : null;
@@ -824,6 +1558,12 @@ var LobbyRoom = class {
       clearTimeout(this.phaseTimer);
       this.phaseTimer = null;
     }
+  }
+  clearSearchTimers() {
+    for (const timerId of this.searchTimers.values()) {
+      clearTimeout(timerId);
+    }
+    this.searchTimers.clear();
   }
   findPlayerBySocket(websocket) {
     for (const player of this.players.values()) {
@@ -854,7 +1594,11 @@ var LobbyRoom = class {
       actionState: player.actionState,
       joined: player.joined,
       ready: player.ready,
-      playerPhase: player.playerPhase
+      playerPhase: player.playerPhase,
+      loadout: serializeLoadout(player),
+      equippedSlot: clampNumber(player.equippedSlot, 0, WEAPON_SLOT_COUNT - 1, 0),
+      serverHemorrhoids: player.serverHemorrhoids ?? 0,
+      lastWeaponFireAt: player.lastWeaponFireAt ?? 0
     });
   }
   broadcast(message, excludedPlayerId = null) {
@@ -909,7 +1653,7 @@ var jsonError = /* @__PURE__ */ __name(async (request, env, _ctx, middlewareCtx)
 }, "jsonError");
 var middleware_miniflare3_json_error_default = jsonError;
 
-// .wrangler/tmp/bundle-Nk03Zu/middleware-insertion-facade.js
+// .wrangler/tmp/bundle-zCq8iL/middleware-insertion-facade.js
 var __INTERNAL_WRANGLER_MIDDLEWARE__ = [
   middleware_ensure_req_body_drained_default,
   middleware_miniflare3_json_error_default
@@ -941,7 +1685,7 @@ function __facade_invoke__(request, env, ctx, dispatch, finalMiddleware) {
 }
 __name(__facade_invoke__, "__facade_invoke__");
 
-// .wrangler/tmp/bundle-Nk03Zu/middleware-loader.entry.ts
+// .wrangler/tmp/bundle-zCq8iL/middleware-loader.entry.ts
 var __Facade_ScheduledController__ = class ___Facade_ScheduledController__ {
   constructor(scheduledTime, cron, noRetry) {
     this.scheduledTime = scheduledTime;

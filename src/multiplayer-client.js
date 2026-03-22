@@ -49,6 +49,10 @@ export class MultiplayerClient {
     onMatchState = () => {},
     onPose = () => {},
     onAction = () => {},
+    onLootState = () => {},
+    onLootEvent = () => {},
+    onLoadoutState = () => {},
+    onCombatEvent = () => {},
     onWorldEvent = () => {},
     onError = () => {},
   } = {}) {
@@ -60,6 +64,10 @@ export class MultiplayerClient {
     this.onMatchState = onMatchState;
     this.onPose = onPose;
     this.onAction = onAction;
+    this.onLootState = onLootState;
+    this.onLootEvent = onLootEvent;
+    this.onLoadoutState = onLoadoutState;
+    this.onCombatEvent = onCombatEvent;
     this.onWorldEvent = onWorldEvent;
     this.onError = onError;
 
@@ -205,6 +213,26 @@ export class MultiplayerClient {
       return;
     }
 
+    if (message.type === "loot-state") {
+      this.onLootState(message);
+      return;
+    }
+
+    if (message.type === "loot-event") {
+      this.onLootEvent(message);
+      return;
+    }
+
+    if (message.type === "loadout-state") {
+      this.onLoadoutState(message);
+      return;
+    }
+
+    if (message.type === "combat-event") {
+      this.onCombatEvent(message);
+      return;
+    }
+
     if (message.type === "world-event") {
       this.onWorldEvent(message);
       return;
@@ -288,6 +316,54 @@ export class MultiplayerClient {
           kind,
           ...data,
         },
+      }),
+    );
+  }
+
+  sendInteract(kind, data = {}) {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      return;
+    }
+
+    this.ws.send(
+      JSON.stringify({
+        type: "interact",
+        interact: {
+          kind,
+          ...data,
+        },
+      }),
+    );
+  }
+
+  sendEquipSlot(slot) {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      return;
+    }
+
+    this.ws.send(
+      JSON.stringify({
+        type: "equip-slot",
+        slot,
+      }),
+    );
+  }
+
+  sendFireWeapon({
+    origin,
+    direction,
+    seed,
+  }) {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      return;
+    }
+
+    this.ws.send(
+      JSON.stringify({
+        type: "fire-weapon",
+        origin,
+        direction,
+        seed,
       }),
     );
   }

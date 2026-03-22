@@ -21,6 +21,10 @@ export const COUNTDOWN_DURATION_MS = 10_000;
 export const BUS_FLIGHT_DURATION_MS = 28_000;
 export const BUS_DOORS_OPEN_OFFSET_MS = 2_500;
 export const BUS_AUTO_DROP_OFFSET_MS = 24_000;
+export const WEAPON_SLOT_COUNT = 3;
+export const TOILET_SEARCH_DURATION_MS = 850;
+export const TOILET_INTERACT_RANGE = 4.6;
+export const GROUND_LOOT_PICKUP_RANGE = 3.6;
 
 export const MATCH_PHASES = Object.freeze({
   staging: "staging",
@@ -63,10 +67,154 @@ export const ACTION_KINDS = Object.freeze({
   strike: "strike",
 });
 
+export const INTERACT_KINDS = Object.freeze({
+  searchStart: "search-start",
+  searchCancel: "search-cancel",
+  pickupGroundLoot: "pickup-ground-loot",
+});
+
+export const COMBAT_EVENT_KINDS = Object.freeze({
+  weaponFired: "weapon-fired",
+  weaponHit: "weapon-hit",
+  playerEliminated: "player-eliminated",
+});
+
 export const WORLD_EVENT_KINDS = Object.freeze({
   targetHit: "target-hit",
   playerHit: "player-hit",
 });
+
+export const WEAPON_TYPES = Object.freeze({
+  assaultRifle: "assault-rifle",
+  shotgun: "pump-shotgun",
+  smg: "smg",
+});
+
+export const WEAPON_RARITIES = Object.freeze({
+  gray: "gray",
+  green: "green",
+  blue: "blue",
+  purple: "purple",
+});
+
+export const WEAPON_RARITY_ORDER = Object.freeze([
+  WEAPON_RARITIES.gray,
+  WEAPON_RARITIES.green,
+  WEAPON_RARITIES.blue,
+  WEAPON_RARITIES.purple,
+]);
+
+export const WEAPON_RARITY_COLORS = Object.freeze({
+  [WEAPON_RARITIES.gray]: "#8b939d",
+  [WEAPON_RARITIES.green]: "#4caf50",
+  [WEAPON_RARITIES.blue]: "#2f89ff",
+  [WEAPON_RARITIES.purple]: "#b25cff",
+});
+
+export const WEAPON_TYPE_LABELS = Object.freeze({
+  [WEAPON_TYPES.assaultRifle]: "ASSAULT RIFLE",
+  [WEAPON_TYPES.shotgun]: "PUMP SHOTGUN",
+  [WEAPON_TYPES.smg]: "SMG",
+});
+
+export const WEAPON_DEFINITIONS = Object.freeze({
+  [WEAPON_TYPES.assaultRifle]: Object.freeze({
+    fireRate: 6.5,
+    damage: Object.freeze({
+      [WEAPON_RARITIES.gray]: 22,
+      [WEAPON_RARITIES.green]: 24,
+      [WEAPON_RARITIES.blue]: 26,
+      [WEAPON_RARITIES.purple]: 28,
+    }),
+    spread: Object.freeze({
+      [WEAPON_RARITIES.gray]: 0.038,
+      [WEAPON_RARITIES.green]: 0.034,
+      [WEAPON_RARITIES.blue]: 0.03,
+      [WEAPON_RARITIES.purple]: 0.026,
+    }),
+    recoilKick: Object.freeze({
+      [WEAPON_RARITIES.gray]: 0.014,
+      [WEAPON_RARITIES.green]: 0.013,
+      [WEAPON_RARITIES.blue]: 0.012,
+      [WEAPON_RARITIES.purple]: 0.011,
+    }),
+    maxRange: 78,
+    impactScale: 1,
+    pellets: 1,
+  }),
+  [WEAPON_TYPES.shotgun]: Object.freeze({
+    fireRate: 0.85,
+    damage: Object.freeze({
+      [WEAPON_RARITIES.gray]: 9,
+      [WEAPON_RARITIES.green]: 10,
+      [WEAPON_RARITIES.blue]: 11,
+      [WEAPON_RARITIES.purple]: 12,
+    }),
+    spread: Object.freeze({
+      [WEAPON_RARITIES.gray]: 0.16,
+      [WEAPON_RARITIES.green]: 0.148,
+      [WEAPON_RARITIES.blue]: 0.136,
+      [WEAPON_RARITIES.purple]: 0.124,
+    }),
+    recoilKick: Object.freeze({
+      [WEAPON_RARITIES.gray]: 0.028,
+      [WEAPON_RARITIES.green]: 0.026,
+      [WEAPON_RARITIES.blue]: 0.024,
+      [WEAPON_RARITIES.purple]: 0.022,
+    }),
+    maxRange: 19,
+    impactScale: 1.25,
+    pellets: 8,
+  }),
+  [WEAPON_TYPES.smg]: Object.freeze({
+    fireRate: 10.5,
+    damage: Object.freeze({
+      [WEAPON_RARITIES.gray]: 15,
+      [WEAPON_RARITIES.green]: 16,
+      [WEAPON_RARITIES.blue]: 17,
+      [WEAPON_RARITIES.purple]: 18,
+    }),
+    spread: Object.freeze({
+      [WEAPON_RARITIES.gray]: 0.05,
+      [WEAPON_RARITIES.green]: 0.046,
+      [WEAPON_RARITIES.blue]: 0.042,
+      [WEAPON_RARITIES.purple]: 0.038,
+    }),
+    recoilKick: Object.freeze({
+      [WEAPON_RARITIES.gray]: 0.012,
+      [WEAPON_RARITIES.green]: 0.011,
+      [WEAPON_RARITIES.blue]: 0.01,
+      [WEAPON_RARITIES.purple]: 0.009,
+    }),
+    maxRange: 46,
+    impactScale: 0.92,
+    pellets: 1,
+  }),
+});
+
+export const WEAPON_RARITY_WEIGHTS = Object.freeze({
+  [WEAPON_RARITIES.gray]: 46,
+  [WEAPON_RARITIES.green]: 30,
+  [WEAPON_RARITIES.blue]: 17,
+  [WEAPON_RARITIES.purple]: 7,
+});
+
+export const WEAPON_TYPE_WEIGHTS = Object.freeze({
+  [WEAPON_TYPES.assaultRifle]: 45,
+  [WEAPON_TYPES.smg]: 35,
+  [WEAPON_TYPES.shotgun]: 20,
+});
+
+export const TOILET_SPAWNS = Object.freeze([
+  Object.freeze({ id: "toilet-town-west-shop", x: -26.8, y: 0, z: 40.6, yaw: Math.PI / 2 }),
+  Object.freeze({ id: "toilet-town-east-shop", x: 26.8, y: 0, z: 40.6, yaw: -Math.PI / 2 }),
+  Object.freeze({ id: "toilet-town-northwest-house", x: -16.6, y: 0, z: 57.2, yaw: Math.PI / 2 }),
+  Object.freeze({ id: "toilet-town-northeast-house", x: 16.6, y: 0, z: 57.2, yaw: -Math.PI / 2 }),
+  Object.freeze({ id: "toilet-forest-connector", x: 0, y: 0, z: -39.5, yaw: 0 }),
+  Object.freeze({ id: "toilet-desert-roadside", x: 40, y: 0, z: -6, yaw: -Math.PI / 2 }),
+  Object.freeze({ id: "toilet-snow-roadside", x: -40, y: 0, z: -5.4, yaw: Math.PI / 2 }),
+  Object.freeze({ id: "toilet-south-town-connector", x: 0, y: 0, z: 40.4, yaw: Math.PI }),
+]);
 
 export const PLAYER_COLOR_PALETTE = [
   "#d9823f",
@@ -125,6 +273,10 @@ export function createActionState() {
     poopActive: false,
     strikeAt: 0,
   };
+}
+
+export function createEmptyLoadout() {
+  return Array.from({ length: WEAPON_SLOT_COUNT }, () => null);
 }
 
 export function createMatchState() {
