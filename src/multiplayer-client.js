@@ -298,7 +298,7 @@ export class MultiplayerClient {
     );
   }
 
-  sendPlayerState(playerPhase) {
+  sendPlayerState(playerPhase, pose = null) {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       return;
     }
@@ -307,6 +307,7 @@ export class MultiplayerClient {
       JSON.stringify({
         type: "player-state",
         playerPhase,
+        pose,
       }),
     );
   }

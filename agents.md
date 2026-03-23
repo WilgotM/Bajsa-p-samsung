@@ -22,6 +22,7 @@ Det här är ett litet 3D-webbspel byggt med Vite och Three.js.
 - Countdown startar när minst en spelare är i samma lobby och alla anslutna spelare i den lobbyn har markerat `Ready` (så solo-test funkar).
 - Workern skickar `match-state` till klienterna med `phase`, `readyCount`, `countdownEndsAt`, battle bus-tidsstämplar, samt rundfält som `activeEndsAt`, `overtimeEndsAt`, `resultsEndsAt`, `remainingContenders`, `winnerPlayerId` och `winnerReason`.
 - Klienten kan skicka `ready` och `player-state` över WebSocket för att toggla redo-status och rapportera lokala fasbyten som glid/landning.
+- `player-state` ska vid fasbyten också bära med aktuell `pose`, eftersom buss/glid/landning annars kan se ut som otillåtna teleports för Workern och lämna servern kvar på gammal position.
 - Spelare som joinar under `bus`, `active`, `overtime` eller `results` blir spectator för pågående runda och blir riktiga deltagare först nästa `staging`.
 
 ## Vad som synkas

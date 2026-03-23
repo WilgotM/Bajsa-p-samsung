@@ -1123,7 +1123,7 @@ export class LobbyRoom {
     }
 
     if (payload.type === "player-state") {
-      this.handlePlayerState(player, payload.playerPhase);
+      this.handlePlayerState(player, payload.playerPhase, payload.pose);
       return;
     }
 
@@ -1269,7 +1269,7 @@ export class LobbyRoom {
     this.reconcileMatchState(true);
   }
 
-  handlePlayerState(player, nextPhase) {
+  handlePlayerState(player, nextPhase, inputPose = null) {
     if (!player.joined || !isValidPlayerState(nextPhase)) {
       return;
     }
@@ -1314,6 +1314,9 @@ export class LobbyRoom {
     }
 
     this.cancelPlayerSearch(player);
+    if (inputPose) {
+      player.pose = clampPose(inputPose, player.pose);
+    }
     player.playerPhase = nextPhase;
     player.ready = false;
     player.actionState.poopActive = false;

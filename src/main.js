@@ -4917,7 +4917,7 @@ function enterLocalStagingPhase(broadcast = true) {
   multiplayerState.spectatorTargetId = null;
   positionPlayerForPhase(PLAYER_STATES.staging);
   if (broadcast && multiplayerState.joined) {
-    multiplayer.sendPlayerState(PLAYER_STATES.staging);
+    multiplayer.sendPlayerState(PLAYER_STATES.staging, createLocalPosePacket());
   }
   syncMatchPanel();
   syncRoundUi();
@@ -4933,7 +4933,7 @@ function enterLocalBusPhase(broadcast = true) {
   state.localReady = false;
   positionPlayerForPhase(PLAYER_STATES.bus);
   if (broadcast && multiplayerState.joined) {
-    multiplayer.sendPlayerState(PLAYER_STATES.bus);
+    multiplayer.sendPlayerState(PLAYER_STATES.bus, createLocalPosePacket());
   }
   syncMatchPanel();
   syncRoundUi();
@@ -4960,7 +4960,7 @@ function enterLocalGlidePhase(broadcast = true, isAutoDrop = false, spawnPose = 
   }
   state.autoDropTriggered = isAutoDrop;
   if (broadcast && multiplayerState.joined) {
-    multiplayer.sendPlayerState(PLAYER_STATES.glide);
+    multiplayer.sendPlayerState(PLAYER_STATES.glide, createLocalPosePacket());
   }
   syncMatchPanel();
   syncRoundUi();
@@ -4985,7 +4985,7 @@ function enterLocalActivePhase(broadcast = true, snapToIslandSpawn = false, spaw
   hero.root.position.copy(state.playerPosition);
   hero.root.rotation.y = state.playerYaw;
   if (broadcast && multiplayerState.joined) {
-    multiplayer.sendPlayerState(PLAYER_STATES.active);
+    multiplayer.sendPlayerState(PLAYER_STATES.active, createLocalPosePacket());
   }
   syncMatchPanel();
   syncRoundUi();
@@ -5758,7 +5758,7 @@ function attemptLocalRoundStateResync() {
     desiredPhase === PLAYER_STATES.glide ||
     desiredPhase === PLAYER_STATES.active;
   if (canResyncPhase && serverPhase !== desiredPhase && now - multiplayerState.lastPhaseResyncAt >= 260) {
-    multiplayer.sendPlayerState(desiredPhase);
+    multiplayer.sendPlayerState(desiredPhase, createLocalPosePacket());
     multiplayerState.lastPhaseResyncAt = now;
   }
 
