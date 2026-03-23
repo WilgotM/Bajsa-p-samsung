@@ -17,6 +17,7 @@ import {
   PHONE_PRESSURE_NEARBY_INNER_RADIUS,
   PHONE_PRESSURE_NEARBY_MAX,
   PHONE_PRESSURE_NEARBY_OUTER_RADIUS,
+  PHONE_ROTATION_Y,
   PHONE_STAND_BOUNDS,
   PLAYER_COLOR_PALETTE,
   PLAYER_LIVES,
@@ -123,9 +124,13 @@ function planarDistance(a, b) {
 }
 
 function getPhonePressureState(pose) {
+  const cosRotation = Math.cos(-PHONE_ROTATION_Y);
+  const sinRotation = Math.sin(-PHONE_ROTATION_Y);
+  const localX = (pose?.x ?? 0) * cosRotation + (pose?.z ?? 0) * sinRotation;
+  const localZ = -(pose?.x ?? 0) * sinRotation + (pose?.z ?? 0) * cosRotation;
   const onPhone =
-    Math.abs(pose?.x ?? 0) <= PHONE_STAND_BOUNDS.halfX &&
-    Math.abs(pose?.z ?? 0) <= PHONE_STAND_BOUNDS.halfZ;
+    Math.abs(localX) <= PHONE_STAND_BOUNDS.halfX &&
+    Math.abs(localZ) <= PHONE_STAND_BOUNDS.halfZ;
   const distanceToPhone = Math.hypot(pose?.x ?? 0, pose?.z ?? 0);
   const nearbyPressure = clampNumber(
     mapLinear(

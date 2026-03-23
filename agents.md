@@ -41,6 +41,7 @@ Det här är ett litet 3D-webbspel byggt med Vite och Three.js.
 
 - Varje deltagare har `3 liv`.
 - Score är server-auktoritativ och mäts som `scoreMeters`. Den ökar bara när spelaren faktiskt bajsar under `active`/`overtime`.
+- Samsung-skärmens träff-/ståyta måste tolkas likadant i klient och worker. Om telefonens rotation ändras ska den delas via `shared/` så score/hemorojdlogik inte desynkar från den synliga modellen.
 - När hemorojdrisken når `100` dör spelaren, all spelarens bajsscore nollas, spelarens bajsvisualer ska bort och spelaren går kort in i spectatorläge.
 - Om spelaren har liv kvar redeployas spelaren från luften igen i `glide` efter ungefär `2.5s`.
 - Om liv når `0` blir spelaren permanent eliminerad för rundan.

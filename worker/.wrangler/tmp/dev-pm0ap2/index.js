@@ -16,16 +16,57 @@ var COUNTDOWN_DURATION_MS = 1e4;
 var BUS_FLIGHT_DURATION_MS = 28e3;
 var BUS_DOORS_OPEN_OFFSET_MS = 2500;
 var BUS_AUTO_DROP_OFFSET_MS = 24e3;
+var ROUND_ACTIVE_DURATION_MS = 18e4;
+var ROUND_OVERTIME_DURATION_MS = 2e4;
+var ROUND_RESULTS_DURATION_MS = 8e3;
+var PLAYER_RESPAWN_DELAY_MS = 2500;
+var PLAYER_LIVES = 3;
 var WEAPON_SLOT_COUNT = 3;
 var TOILET_SEARCH_DURATION_MS = 850;
 var TOILET_INTERACT_RANGE = 4.6;
 var GROUND_LOOT_PICKUP_RANGE = 3.6;
+var POOP_SCORE_METERS_PER_SECOND = 2.88;
+var PHONE_PRESSURE_NEARBY_OUTER_RADIUS = 9.2;
+var PHONE_PRESSURE_NEARBY_INNER_RADIUS = 2.8;
+var PHONE_PRESSURE_NEARBY_MAX = 0.4;
+var PHONE_HEMORRHOIDS_ON_PHONE_PER_SECOND = 17;
+var PHONE_HEMORRHOIDS_NEARBY_BASE_PER_SECOND = 2;
+var PHONE_HEMORRHOIDS_NEARBY_EXTRA_PER_SECOND = 9;
+var PHONE_ROTATION_Y = -0.32;
+var PHONE_STAND_BOUNDS = Object.freeze({
+  halfX: 3.1 * 0.49,
+  halfZ: 6.8 * 0.49
+});
 var MATCH_PHASES = Object.freeze({
   staging: "staging",
   countdown: "countdown",
   bus: "bus",
   glide: "glide",
-  active: "active"
+  active: "active",
+  overtime: "overtime",
+  results: "results"
+});
+var PLAYER_STATES = Object.freeze({
+  staging: MATCH_PHASES.staging,
+  bus: MATCH_PHASES.bus,
+  glide: MATCH_PHASES.glide,
+  active: MATCH_PHASES.active,
+  spectating: "spectating",
+  eliminated: "eliminated"
+});
+var ROUND_END_REASONS = Object.freeze({
+  lastPlayer: "last-player",
+  time: "time",
+  overtime: "overtime",
+  samsungSurvived: "samsung-survived",
+  soloLoss: "solo-loss"
+});
+var ROUND_EVENT_KINDS = Object.freeze({
+  playerDied: "player-died",
+  playerRespawned: "player-respawned",
+  playerEliminated: "player-eliminated",
+  overtimeStarted: "overtime-started",
+  matchEnded: "match-ended"
 });
 var PLAYER_SPAWN = Object.freeze({
   x: 0,
@@ -126,16 +167,16 @@ var WEAPON_DEFINITIONS = Object.freeze({
   [WEAPON_TYPES.shotgun]: Object.freeze({
     fireRate: 0.85,
     damage: Object.freeze({
-      [WEAPON_RARITIES.gray]: 9,
-      [WEAPON_RARITIES.green]: 10,
-      [WEAPON_RARITIES.blue]: 11,
-      [WEAPON_RARITIES.purple]: 12
+      [WEAPON_RARITIES.gray]: 12,
+      [WEAPON_RARITIES.green]: 13,
+      [WEAPON_RARITIES.blue]: 14,
+      [WEAPON_RARITIES.purple]: 15
     }),
     spread: Object.freeze({
-      [WEAPON_RARITIES.gray]: 0.16,
-      [WEAPON_RARITIES.green]: 0.148,
-      [WEAPON_RARITIES.blue]: 0.136,
-      [WEAPON_RARITIES.purple]: 0.124
+      [WEAPON_RARITIES.gray]: 0.12,
+      [WEAPON_RARITIES.green]: 0.112,
+      [WEAPON_RARITIES.blue]: 0.104,
+      [WEAPON_RARITIES.purple]: 0.096
     }),
     recoilKick: Object.freeze({
       [WEAPON_RARITIES.gray]: 0.028,
@@ -143,7 +184,7 @@ var WEAPON_DEFINITIONS = Object.freeze({
       [WEAPON_RARITIES.blue]: 0.024,
       [WEAPON_RARITIES.purple]: 0.022
     }),
-    maxRange: 19,
+    maxRange: 22,
     impactScale: 1.25,
     pellets: 8
   }),
@@ -259,7 +300,14 @@ function createMatchState() {
     busStartedAt: null,
     doorsOpenAt: null,
     autoDropAt: null,
-    busEndsAt: null
+    busEndsAt: null,
+    activeStartedAt: null,
+    activeEndsAt: null,
+    overtimeEndsAt: null,
+    resultsEndsAt: null,
+    remainingContenders: 0,
+    winnerPlayerId: null,
+    winnerReason: ""
   };
 }
 __name(createMatchState, "createMatchState");
@@ -268,8 +316,8 @@ function getBusSchedule(busStartedAt) {
     return createMatchState();
   }
   return {
+    ...createMatchState(),
     phase: MATCH_PHASES.bus,
-    countdownEndsAt: null,
     busStartedAt,
     doorsOpenAt: busStartedAt + BUS_DOORS_OPEN_OFFSET_MS,
     autoDropAt: busStartedAt + BUS_AUTO_DROP_OFFSET_MS,
@@ -281,10 +329,10 @@ function isValidLobbyId(lobbyId) {
   return LOBBY_IDS.includes(lobbyId);
 }
 __name(isValidLobbyId, "isValidLobbyId");
-function isValidMatchPhase(phase) {
-  return Object.values(MATCH_PHASES).includes(phase);
+function isValidPlayerState(phase) {
+  return Object.values(PLAYER_STATES).includes(phase);
 }
-__name(isValidMatchPhase, "isValidMatchPhase");
+__name(isValidPlayerState, "isValidPlayerState");
 function sanitizePlayerName(name, fallbackName = "") {
   if (typeof name !== "string") {
     return fallbackName;
@@ -408,10 +456,54 @@ function clampNumber(value, min, max, fallback) {
   return Math.min(Math.max(value, min), max);
 }
 __name(clampNumber, "clampNumber");
+function mapLinear(value, fromMin, fromMax, toMin, toMax) {
+  if (fromMax === fromMin) {
+    return toMin;
+  }
+  return toMin + (value - fromMin) / (fromMax - fromMin) * (toMax - toMin);
+}
+__name(mapLinear, "mapLinear");
 function planarDistance(a, b) {
   return Math.hypot((a?.x ?? 0) - (b?.x ?? 0), (a?.z ?? 0) - (b?.z ?? 0));
 }
 __name(planarDistance, "planarDistance");
+function getPhonePressureState(pose) {
+  const cosRotation = Math.cos(-PHONE_ROTATION_Y);
+  const sinRotation = Math.sin(-PHONE_ROTATION_Y);
+  const localX = (pose?.x ?? 0) * cosRotation + (pose?.z ?? 0) * sinRotation;
+  const localZ = -(pose?.x ?? 0) * sinRotation + (pose?.z ?? 0) * cosRotation;
+  const onPhone = Math.abs(localX) <= PHONE_STAND_BOUNDS.halfX && Math.abs(localZ) <= PHONE_STAND_BOUNDS.halfZ;
+  const distanceToPhone = Math.hypot(pose?.x ?? 0, pose?.z ?? 0);
+  const nearbyPressure = clampNumber(
+    mapLinear(
+      distanceToPhone,
+      PHONE_PRESSURE_NEARBY_OUTER_RADIUS,
+      PHONE_PRESSURE_NEARBY_INNER_RADIUS,
+      0,
+      PHONE_PRESSURE_NEARBY_MAX
+    ),
+    0,
+    PHONE_PRESSURE_NEARBY_MAX,
+    0
+  );
+  return {
+    onPhone,
+    nearbyPressure
+  };
+}
+__name(getPhonePressureState, "getPhonePressureState");
+function createRedeployPose(player) {
+  const fallback = createSpawnPose(PLAYER_STATES.glide);
+  const nextPose = {
+    x: Number.isFinite(player?.pose?.x) ? player.pose.x : fallback.x,
+    y: 11.4,
+    z: Number.isFinite(player?.pose?.z) ? player.pose.z : fallback.z,
+    yaw: Number.isFinite(player?.pose?.yaw) ? player.pose.yaw : fallback.yaw,
+    moveAmount: 0
+  };
+  return clampPose(nextPose, player?.pose ?? fallback);
+}
+__name(createRedeployPose, "createRedeployPose");
 function copyWeaponStack(stack) {
   if (!stack?.type || !stack?.rarity) {
     return null;
@@ -528,7 +620,13 @@ function serializePlayerSnapshot(player) {
     equippedSlot: clampNumber(player.equippedSlot, 0, WEAPON_SLOT_COUNT - 1, 0),
     equippedWeaponType: equippedWeapon?.type ?? "",
     equippedWeaponRarity: equippedWeapon?.rarity ?? "",
-    isSearching: Boolean(player.isSearching)
+    isSearching: Boolean(player.isSearching),
+    scoreMeters: Number(player.scoreMeters ?? 0),
+    livesRemaining: clampNumber(player.livesRemaining, 0, PLAYER_LIVES, PLAYER_LIVES),
+    hemorrhoids: clampNumber(player.serverHemorrhoids, 0, 100, 0),
+    roundParticipant: Boolean(player.roundParticipant),
+    respawnAt: player.respawnAt ?? null,
+    isEliminated: Boolean(player.isEliminated)
   };
 }
 __name(serializePlayerSnapshot, "serializePlayerSnapshot");
@@ -543,13 +641,20 @@ function createPlayerState({
   joined = false,
   guestIndex = 0,
   ready = false,
-  playerPhase = MATCH_PHASES.staging,
+  playerPhase = PLAYER_STATES.staging,
   loadout = createStarterLoadout(),
   equippedSlot = 0,
   isSearching = false,
   searchingToiletId = null,
   serverHemorrhoids = 0,
-  lastWeaponFireAt = 0
+  lastWeaponFireAt = 0,
+  scoreMeters = 0,
+  livesRemaining = PLAYER_LIVES,
+  roundParticipant = false,
+  respawnAt = null,
+  isEliminated = false,
+  lastRoundTickAt = 0,
+  lastDamagedByPlayerId = null
 }) {
   return {
     id,
@@ -568,10 +673,23 @@ function createPlayerState({
     isSearching,
     searchingToiletId,
     serverHemorrhoids,
-    lastWeaponFireAt
+    lastWeaponFireAt,
+    scoreMeters,
+    livesRemaining,
+    roundParticipant,
+    respawnAt,
+    isEliminated,
+    lastRoundTickAt,
+    lastDamagedByPlayerId
   };
 }
 __name(createPlayerState, "createPlayerState");
+var PLAYER_BODY_HIT_RADIUS = 0.78;
+var PLAYER_BODY_CENTER_Y = 0.95;
+var PLAYER_HEAD_HIT_RADIUS = 0.34;
+var PLAYER_HEAD_CENTER_Y = 1.58;
+var PLAYER_HEADSHOT_HEIGHT_Y = 1.36;
+var HEADSHOT_DAMAGE_MULTIPLIER = 1.25;
 function raySphereDistance(origin, direction, center, radius, maxDistance) {
   const ocX = origin.x - center.x;
   const ocY = origin.y - center.y;
@@ -592,6 +710,51 @@ function raySphereDistance(origin, direction, center, radius, maxDistance) {
   return distance;
 }
 __name(raySphereDistance, "raySphereDistance");
+function resolvePlayerHit(origin, direction, target, maxDistance) {
+  const pose = target.pose ?? createSpawnPose(target.playerPhase);
+  const bodyCenter = {
+    x: pose.x,
+    y: pose.y + PLAYER_BODY_CENTER_Y,
+    z: pose.z
+  };
+  const bodyDistance = raySphereDistance(
+    origin,
+    direction,
+    bodyCenter,
+    PLAYER_BODY_HIT_RADIUS,
+    maxDistance
+  );
+  if (!Number.isFinite(bodyDistance)) {
+    return null;
+  }
+  const headCenter = {
+    x: pose.x,
+    y: pose.y + PLAYER_HEAD_CENTER_Y,
+    z: pose.z
+  };
+  const headDistance = raySphereDistance(
+    origin,
+    direction,
+    headCenter,
+    PLAYER_HEAD_HIT_RADIUS,
+    maxDistance
+  );
+  const explicitHeadHit = Number.isFinite(headDistance) && headDistance <= bodyDistance + PLAYER_HEAD_HIT_RADIUS * 1.2;
+  const distance = explicitHeadHit ? Math.min(bodyDistance, headDistance) : bodyDistance;
+  const impactPoint = {
+    x: origin.x + direction.x * distance,
+    y: origin.y + direction.y * distance,
+    z: origin.z + direction.z * distance
+  };
+  const headshot = explicitHeadHit || impactPoint.y >= pose.y + PLAYER_HEADSHOT_HEIGHT_Y;
+  return {
+    distance,
+    impactPoint,
+    headshot,
+    hitRegion: headshot ? "head" : "body"
+  };
+}
+__name(resolvePlayerHit, "resolvePlayerHit");
 function jitterDirection(direction, spread, random) {
   const jittered = {
     x: direction.x + (random() - 0.5) * spread,
@@ -695,13 +858,20 @@ var LobbyRoom = class {
           joined: attachment.joined ?? false,
           guestIndex: attachment.guestIndex ?? 0,
           ready: attachment.ready ?? false,
-          playerPhase: attachment.playerPhase ?? MATCH_PHASES.staging,
+          playerPhase: attachment.playerPhase ?? PLAYER_STATES.staging,
           loadout: attachment.loadout ?? createStarterLoadout(),
           equippedSlot: attachment.equippedSlot ?? 0,
           isSearching: false,
           searchingToiletId: null,
           serverHemorrhoids: attachment.serverHemorrhoids ?? 0,
-          lastWeaponFireAt: attachment.lastWeaponFireAt ?? 0
+          lastWeaponFireAt: attachment.lastWeaponFireAt ?? 0,
+          scoreMeters: attachment.scoreMeters ?? 0,
+          livesRemaining: attachment.livesRemaining ?? PLAYER_LIVES,
+          roundParticipant: attachment.roundParticipant ?? false,
+          respawnAt: attachment.respawnAt ?? null,
+          isEliminated: attachment.isEliminated ?? false,
+          lastRoundTickAt: attachment.lastRoundTickAt ?? 0,
+          lastDamagedByPlayerId: attachment.lastDamagedByPlayerId ?? null
         })
       );
       this.guestCounter = Math.max(this.guestCounter, (attachment.guestIndex ?? 0) + 1);
@@ -721,6 +891,349 @@ var LobbyRoom = class {
     player.lastWeaponFireAt = 0;
     this.updateAttachment(player);
   }
+  isSoloLobby() {
+    return this.lobbyId === "solo";
+  }
+  isRoundJoinLocked() {
+    return this.matchState.phase !== MATCH_PHASES.staging && this.matchState.phase !== MATCH_PHASES.countdown;
+  }
+  promoteBusToActiveIfDue(now = Date.now()) {
+    if (this.matchState.phase !== MATCH_PHASES.bus) {
+      return false;
+    }
+    if (!Number.isFinite(this.matchState.activeStartedAt) || now < this.matchState.activeStartedAt) {
+      return false;
+    }
+    this.enterActivePhase(now);
+    return true;
+  }
+  initializePlayerForRound(player, phase = PLAYER_STATES.staging, now = Date.now()) {
+    this.cancelPlayerSearch(player);
+    player.roundParticipant = true;
+    player.livesRemaining = PLAYER_LIVES;
+    player.scoreMeters = 0;
+    player.serverHemorrhoids = 0;
+    player.respawnAt = null;
+    player.isEliminated = false;
+    player.lastRoundTickAt = now;
+    player.lastDamagedByPlayerId = null;
+    player.ready = false;
+    player.actionState.poopActive = false;
+    player.playerPhase = phase;
+    player.pose = createSpawnPose(phase);
+    this.resetPlayerCombatState(player);
+    this.updateAttachment(player);
+  }
+  initializePlayerAsSpectator(player, now = Date.now()) {
+    this.cancelPlayerSearch(player);
+    player.roundParticipant = false;
+    player.livesRemaining = 0;
+    player.scoreMeters = 0;
+    player.serverHemorrhoids = 0;
+    player.respawnAt = null;
+    player.isEliminated = false;
+    player.lastRoundTickAt = now;
+    player.lastDamagedByPlayerId = null;
+    player.ready = false;
+    player.actionState.poopActive = false;
+    player.playerPhase = PLAYER_STATES.spectating;
+    player.pose = createSpawnPose(PLAYER_STATES.active);
+    this.resetPlayerCombatState(player);
+    this.updateAttachment(player);
+  }
+  broadcastRoundEvent(kind, event) {
+    this.broadcast({
+      type: "round-event",
+      kind,
+      event
+    });
+  }
+  getContenderPlayers() {
+    return this.getJoinedPlayers().filter(
+      (player) => player.roundParticipant && !player.isEliminated && player.livesRemaining > 0
+    );
+  }
+  getScoreboardPlayers() {
+    return this.getJoinedPlayers().filter((player) => player.roundParticipant && !player.isEliminated && player.livesRemaining > 0).sort((first, second) => {
+      if ((second.scoreMeters ?? 0) !== (first.scoreMeters ?? 0)) {
+        return (second.scoreMeters ?? 0) - (first.scoreMeters ?? 0);
+      }
+      if ((second.livesRemaining ?? 0) !== (first.livesRemaining ?? 0)) {
+        return (second.livesRemaining ?? 0) - (first.livesRemaining ?? 0);
+      }
+      if ((first.serverHemorrhoids ?? 0) !== (second.serverHemorrhoids ?? 0)) {
+        return (first.serverHemorrhoids ?? 0) - (second.serverHemorrhoids ?? 0);
+      }
+      return (first.guestIndex ?? 0) - (second.guestIndex ?? 0);
+    });
+  }
+  syncPlayerRoundState(player, now = Date.now()) {
+    if (!player?.joined) {
+      return {
+        statsChanged: false,
+        died: false
+      };
+    }
+    this.promoteBusToActiveIfDue(now);
+    const previousTick = Number.isFinite(player.lastRoundTickAt) && player.lastRoundTickAt > 0 ? player.lastRoundTickAt : now;
+    player.lastRoundTickAt = now;
+    if (!player.roundParticipant || player.isEliminated || player.playerPhase !== PLAYER_STATES.active || this.matchState.phase !== MATCH_PHASES.active && this.matchState.phase !== MATCH_PHASES.overtime) {
+      return {
+        statsChanged: false,
+        died: false
+      };
+    }
+    const deltaSeconds = Math.min(0.35, Math.max(0, (now - previousTick) / 1e3));
+    if (deltaSeconds <= 0) {
+      return {
+        statsChanged: false,
+        died: false
+      };
+    }
+    let statsChanged = false;
+    const pressureState = getPhonePressureState(player.pose);
+    if (player.actionState.poopActive && pressureState.onPhone) {
+      player.scoreMeters += deltaSeconds * POOP_SCORE_METERS_PER_SECOND;
+      statsChanged = true;
+    }
+    let nextHemorrhoids = player.serverHemorrhoids;
+    if (pressureState.onPhone) {
+      nextHemorrhoids = Math.min(
+        100,
+        nextHemorrhoids + deltaSeconds * PHONE_HEMORRHOIDS_ON_PHONE_PER_SECOND
+      );
+    } else if (pressureState.nearbyPressure > 0) {
+      nextHemorrhoids = Math.min(
+        100,
+        nextHemorrhoids + deltaSeconds * (PHONE_HEMORRHOIDS_NEARBY_BASE_PER_SECOND + pressureState.nearbyPressure * PHONE_HEMORRHOIDS_NEARBY_EXTRA_PER_SECOND)
+      );
+    }
+    if (nextHemorrhoids !== player.serverHemorrhoids) {
+      player.serverHemorrhoids = nextHemorrhoids;
+      statsChanged = true;
+    }
+    if (player.serverHemorrhoids >= 100) {
+      this.resolvePlayerDeath(player, {
+        attackerPlayerId: player.lastDamagedByPlayerId,
+        cause: "pressure",
+        now
+      });
+      return {
+        statsChanged: true,
+        died: true
+      };
+    }
+    if (statsChanged) {
+      this.updateAttachment(player);
+    }
+    return {
+      statsChanged,
+      died: false
+    };
+  }
+  resolvePlayerDeath(player, { attackerPlayerId = null, cause = "pressure", now = Date.now() } = {}) {
+    if (!player?.joined || !player.roundParticipant || player.isEliminated || player.playerPhase === PLAYER_STATES.spectating && Number.isFinite(player.respawnAt)) {
+      return;
+    }
+    this.cancelPlayerSearch(player);
+    player.ready = false;
+    player.actionState.poopActive = false;
+    player.scoreMeters = 0;
+    player.serverHemorrhoids = 0;
+    player.lastRoundTickAt = now;
+    player.lastDamagedByPlayerId = attackerPlayerId;
+    player.livesRemaining = Math.max(0, (player.livesRemaining ?? PLAYER_LIVES) - 1);
+    let respawnAt = null;
+    if (player.livesRemaining > 0) {
+      player.playerPhase = PLAYER_STATES.spectating;
+      player.respawnAt = now + PLAYER_RESPAWN_DELAY_MS;
+      respawnAt = player.respawnAt;
+    } else {
+      player.playerPhase = PLAYER_STATES.eliminated;
+      player.respawnAt = null;
+      player.isEliminated = true;
+    }
+    this.updateAttachment(player);
+    this.broadcastPresenceUpdate(player);
+    this.broadcastRoundEvent(ROUND_EVENT_KINDS.playerDied, {
+      targetPlayerId: player.id,
+      attackerPlayerId,
+      cause,
+      at: now,
+      remainingLives: player.livesRemaining,
+      respawnAt
+    });
+    if (player.isEliminated) {
+      this.broadcastRoundEvent(ROUND_EVENT_KINDS.playerEliminated, {
+        targetPlayerId: player.id,
+        attackerPlayerId,
+        at: now
+      });
+    }
+  }
+  respawnPlayer(player, now = Date.now()) {
+    if (!player?.joined || !player.roundParticipant || player.isEliminated || player.livesRemaining <= 0 || !Number.isFinite(player.respawnAt) || now < player.respawnAt) {
+      return false;
+    }
+    player.respawnAt = null;
+    player.playerPhase = PLAYER_STATES.glide;
+    player.serverHemorrhoids = 0;
+    player.actionState.poopActive = false;
+    player.lastRoundTickAt = now;
+    player.pose = createRedeployPose(player);
+    this.updateAttachment(player);
+    this.broadcastPresenceUpdate(player);
+    this.broadcastRoundEvent(ROUND_EVENT_KINDS.playerRespawned, {
+      targetPlayerId: player.id,
+      at: now,
+      pose: sanitizeVector3(player.pose)
+    });
+    return true;
+  }
+  startOvertimePhase(now = Date.now()) {
+    this.matchState = {
+      ...this.matchState,
+      phase: MATCH_PHASES.overtime,
+      overtimeEndsAt: now + ROUND_OVERTIME_DURATION_MS,
+      resultsEndsAt: null,
+      winnerPlayerId: null,
+      winnerReason: "",
+      remainingContenders: this.getContenderPlayers().length
+    };
+    this.broadcastRoundEvent(ROUND_EVENT_KINDS.overtimeStarted, {
+      at: now,
+      overtimeEndsAt: this.matchState.overtimeEndsAt
+    });
+    this.broadcastMatchState();
+    this.schedulePhaseTimer();
+  }
+  endRound(winnerPlayerId, winnerReason, now = Date.now()) {
+    this.matchState = {
+      ...this.matchState,
+      phase: MATCH_PHASES.results,
+      resultsEndsAt: now + ROUND_RESULTS_DURATION_MS,
+      winnerPlayerId: winnerPlayerId ?? null,
+      winnerReason,
+      remainingContenders: this.getContenderPlayers().length
+    };
+    for (const player of this.getJoinedPlayers()) {
+      player.ready = false;
+      player.actionState.poopActive = false;
+      player.respawnAt = null;
+      player.lastRoundTickAt = now;
+      this.updateAttachment(player);
+    }
+    this.broadcastRoundEvent(ROUND_EVENT_KINDS.matchEnded, {
+      at: now,
+      winnerPlayerId: winnerPlayerId ?? null,
+      winnerReason,
+      resultsEndsAt: this.matchState.resultsEndsAt
+    });
+    this.broadcastMatchState();
+    this.schedulePhaseTimer();
+  }
+  resetToStaging(now = Date.now()) {
+    this.matchState = createMatchState();
+    this.resetLootState();
+    for (const player of this.getJoinedPlayers()) {
+      this.initializePlayerForRound(player, PLAYER_STATES.staging, now);
+      this.sendToPlayer(player, serializeLoadoutState(player));
+    }
+    this.broadcast(serializeLootState(this));
+    this.broadcastMatchState();
+    this.schedulePhaseTimer();
+  }
+  resolveActiveTimer(now = Date.now()) {
+    const scoreboard = this.getScoreboardPlayers();
+    if (scoreboard.length === 0) {
+      this.endRound(null, this.isSoloLobby() ? ROUND_END_REASONS.soloLoss : ROUND_END_REASONS.samsungSurvived, now);
+      return;
+    }
+    const topScore = scoreboard[0]?.scoreMeters ?? 0;
+    if (topScore <= 0.01) {
+      this.endRound(null, ROUND_END_REASONS.samsungSurvived, now);
+      return;
+    }
+    const leaders = scoreboard.filter((player) => Math.abs((player.scoreMeters ?? 0) - topScore) < 0.01);
+    if (leaders.length === 1) {
+      this.endRound(leaders[0].id, ROUND_END_REASONS.time, now);
+      return;
+    }
+    this.startOvertimePhase(now);
+  }
+  processScheduledState(now = Date.now()) {
+    if (this.matchState.phase === MATCH_PHASES.results && Number.isFinite(this.matchState.resultsEndsAt) && now >= this.matchState.resultsEndsAt) {
+      this.resetToStaging(now);
+      return true;
+    }
+    if (this.matchState.phase === MATCH_PHASES.countdown && Number.isFinite(this.matchState.countdownEndsAt) && now >= this.matchState.countdownEndsAt) {
+      if (this.canStartCountdown()) {
+        this.startBusPhase(now);
+      } else {
+        this.matchState = createMatchState();
+        this.applyPlayerPhaseToJoinedPlayers(PLAYER_STATES.staging);
+        this.broadcastMatchState();
+        this.schedulePhaseTimer();
+      }
+      return true;
+    }
+    if (this.matchState.phase === MATCH_PHASES.bus && Number.isFinite(this.matchState.activeStartedAt) && now >= this.matchState.activeStartedAt) {
+      this.enterActivePhase(now);
+      return true;
+    }
+    let respawnedAnyPlayer = false;
+    for (const player of this.getJoinedPlayers()) {
+      if (this.respawnPlayer(player, now)) {
+        respawnedAnyPlayer = true;
+      }
+    }
+    if (this.matchState.phase === MATCH_PHASES.active && Number.isFinite(this.matchState.activeEndsAt) && now >= this.matchState.activeEndsAt) {
+      this.resolveActiveTimer(now);
+      return true;
+    }
+    if (this.matchState.phase === MATCH_PHASES.overtime && Number.isFinite(this.matchState.overtimeEndsAt) && now >= this.matchState.overtimeEndsAt) {
+      this.endRound(null, ROUND_END_REASONS.samsungSurvived, now);
+      return true;
+    }
+    return respawnedAnyPlayer;
+  }
+  evaluateRoundState(now = Date.now(), shouldBroadcast = false) {
+    const wasUpdatedByTimer = this.processScheduledState(now);
+    if (wasUpdatedByTimer && this.matchState.phase !== MATCH_PHASES.active && this.matchState.phase !== MATCH_PHASES.overtime) {
+      return;
+    }
+    const contenders = this.getContenderPlayers();
+    const contenderCount = contenders.length;
+    const shouldBroadcastCount = this.matchState.remainingContenders !== contenderCount;
+    this.matchState.remainingContenders = contenderCount;
+    if (this.matchState.phase === MATCH_PHASES.active || this.matchState.phase === MATCH_PHASES.overtime) {
+      if (contenderCount === 0) {
+        this.endRound(null, this.isSoloLobby() ? ROUND_END_REASONS.soloLoss : ROUND_END_REASONS.samsungSurvived, now);
+        return;
+      }
+      if (!this.isSoloLobby() && contenderCount === 1) {
+        this.endRound(contenders[0].id, ROUND_END_REASONS.lastPlayer, now);
+        return;
+      }
+      if (this.matchState.phase === MATCH_PHASES.overtime) {
+        const scoreboard = this.getScoreboardPlayers();
+        const topScore = scoreboard[0]?.scoreMeters ?? 0;
+        if (topScore <= 0.01) {
+          this.endRound(null, ROUND_END_REASONS.samsungSurvived, now);
+          return;
+        }
+        const leaders = scoreboard.filter((player) => Math.abs((player.scoreMeters ?? 0) - topScore) < 0.01);
+        if (leaders.length === 1) {
+          this.endRound(leaders[0].id, ROUND_END_REASONS.overtime, now);
+          return;
+        }
+      }
+    }
+    if (shouldBroadcast || shouldBroadcastCount || wasUpdatedByTimer) {
+      this.broadcastMatchState();
+    }
+    this.schedulePhaseTimer();
+  }
   async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === "/status") {
@@ -729,7 +1242,10 @@ var LobbyRoom = class {
         playerCount: this.getJoinedPlayerCount(),
         readyCount: this.getReadyCount(),
         phase: this.matchState.phase,
-        countdownEndsAt: this.matchState.countdownEndsAt
+        countdownEndsAt: this.matchState.countdownEndsAt,
+        activeEndsAt: this.matchState.activeEndsAt,
+        overtimeEndsAt: this.matchState.overtimeEndsAt,
+        resultsEndsAt: this.matchState.resultsEndsAt
       });
     }
     const connectMatch = url.pathname.match(/^\/connect\/([^/]+)$/);
@@ -792,10 +1308,16 @@ var LobbyRoom = class {
       return;
     }
     if (payload.type === "ping") {
+      const now = Date.now();
+      const { statsChanged, died } = this.syncPlayerRoundState(player, now);
+      if (statsChanged && !died) {
+        this.broadcastPresenceUpdate(player);
+      }
+      this.evaluateRoundState(now, statsChanged);
       websocket.send(
         JSON.stringify({
           type: "pong",
-          now: Date.now()
+          now
         })
       );
       return;
@@ -851,9 +1373,14 @@ var LobbyRoom = class {
     }
   }
   handleHello(player, profile) {
+    const now = Date.now();
     applyProfile(player, profile);
     player.joined = true;
-    player.playerPhase = this.getInitialPlayerPhase();
+    if (this.isRoundJoinLocked()) {
+      this.initializePlayerAsSpectator(player, now);
+    } else {
+      this.initializePlayerForRound(player, PLAYER_STATES.staging, now);
+    }
     if (!(player.loadout ?? []).some((weapon) => weapon?.type && weapon?.rarity)) {
       player.loadout = createStarterLoadout();
       player.equippedSlot = 0;
@@ -909,6 +1436,9 @@ var LobbyRoom = class {
     if (!player.joined) {
       return;
     }
+    if (!player.roundParticipant) {
+      return;
+    }
     if (this.matchState.phase !== MATCH_PHASES.staging && this.matchState.phase !== MATCH_PHASES.countdown) {
       return;
     }
@@ -917,63 +1447,98 @@ var LobbyRoom = class {
     this.reconcileMatchState(true);
   }
   handlePlayerState(player, nextPhase) {
-    if (!player.joined || !isValidMatchPhase(nextPhase) || nextPhase === MATCH_PHASES.countdown) {
+    if (!player.joined || !isValidPlayerState(nextPhase)) {
       return;
     }
-    if (nextPhase === MATCH_PHASES.staging && this.matchState.phase !== MATCH_PHASES.staging && this.matchState.phase !== MATCH_PHASES.countdown) {
+    const now = Date.now();
+    this.promoteBusToActiveIfDue(now);
+    if (!player.roundParticipant || player.isEliminated) {
       return;
     }
-    if (nextPhase === MATCH_PHASES.bus && this.matchState.phase !== MATCH_PHASES.bus) {
+    if (nextPhase === PLAYER_STATES.staging && this.matchState.phase !== MATCH_PHASES.staging && this.matchState.phase !== MATCH_PHASES.countdown) {
       return;
     }
-    if (nextPhase === MATCH_PHASES.glide && this.matchState.phase !== MATCH_PHASES.bus && this.matchState.phase !== MATCH_PHASES.active) {
+    if (nextPhase === PLAYER_STATES.bus && this.matchState.phase !== MATCH_PHASES.bus) {
       return;
     }
-    if (nextPhase === MATCH_PHASES.active && this.matchState.phase !== MATCH_PHASES.bus && this.matchState.phase !== MATCH_PHASES.active) {
+    if (nextPhase === PLAYER_STATES.glide && this.matchState.phase !== MATCH_PHASES.bus && this.matchState.phase !== MATCH_PHASES.active && this.matchState.phase !== MATCH_PHASES.overtime) {
+      return;
+    }
+    if (nextPhase === PLAYER_STATES.active && this.matchState.phase !== MATCH_PHASES.active && this.matchState.phase !== MATCH_PHASES.overtime) {
       return;
     }
     this.cancelPlayerSearch(player);
     player.playerPhase = nextPhase;
     player.ready = false;
     player.actionState.poopActive = false;
+    player.lastRoundTickAt = now;
     this.updateAttachment(player);
-    this.broadcastMatchState();
+    this.broadcastPresenceUpdate(player);
+    this.evaluateRoundState(now, true);
   }
   handlePose(player, inputPose) {
     if (!player.joined) {
       return;
     }
+    const now = Date.now();
     const nextPose = clampPose(inputPose, player.pose);
     if (getTeleportDistance(player.pose, nextPose) > MAX_PACKET_TELEPORT_DISTANCE) {
       return;
     }
     player.pose = nextPose;
+    const { statsChanged, died } = this.syncPlayerRoundState(player, now);
     this.updateAttachment(player);
+    if (statsChanged && !died) {
+      this.broadcastPresenceUpdate(player);
+    }
+    if (died) {
+      this.evaluateRoundState(now, false);
+      return;
+    }
     this.broadcast(
       {
         type: "pose",
         playerId: player.id,
         pose: nextPose,
-        at: Date.now()
+        at: now
       },
       player.id
     );
+    this.evaluateRoundState(now, false);
   }
   handleAction(player, action) {
     if (!player.joined || !action?.kind) {
       return;
     }
     const actionAt = Date.now();
+    const { statsChanged, died } = this.syncPlayerRoundState(player, actionAt);
+    if (statsChanged && !died) {
+      this.broadcastPresenceUpdate(player);
+    }
+    if (died) {
+      this.evaluateRoundState(actionAt, false);
+      return;
+    }
     if (action.kind === ACTION_KINDS.poopStart) {
+      if (this.matchState.phase !== MATCH_PHASES.active && this.matchState.phase !== MATCH_PHASES.overtime) {
+        return;
+      }
+      if (player.playerPhase !== PLAYER_STATES.active || !player.roundParticipant || player.isEliminated) {
+        return;
+      }
       player.actionState.poopActive = true;
     } else if (action.kind === ACTION_KINDS.poopStop) {
       player.actionState.poopActive = false;
     } else if (action.kind === ACTION_KINDS.strike) {
+      if (player.playerPhase !== PLAYER_STATES.active || !player.roundParticipant || player.isEliminated) {
+        return;
+      }
       player.actionState.strikeAt = actionAt;
     } else {
       return;
     }
     this.updateAttachment(player);
+    this.broadcastPresenceUpdate(player);
     this.broadcast(
       {
         type: "action",
@@ -985,6 +1550,7 @@ var LobbyRoom = class {
       },
       player.id
     );
+    this.evaluateRoundState(actionAt, false);
   }
   handleInteract(player, interact) {
     if (!player.joined || !interact?.kind) {
@@ -1016,7 +1582,7 @@ var LobbyRoom = class {
     this.broadcastPresenceUpdate(player);
   }
   handleFireWeapon(player, payload) {
-    if (!player.joined || player.playerPhase !== MATCH_PHASES.active) {
+    if (!player.joined || player.playerPhase !== PLAYER_STATES.active || this.matchState.phase !== MATCH_PHASES.active && this.matchState.phase !== MATCH_PHASES.overtime) {
       return;
     }
     const weapon = getEquippedWeapon(player);
@@ -1029,6 +1595,13 @@ var LobbyRoom = class {
       return;
     }
     const now = Date.now();
+    const attackerTick = this.syncPlayerRoundState(player, now);
+    if (attackerTick.died) {
+      return;
+    }
+    if (attackerTick.statsChanged) {
+      this.broadcastPresenceUpdate(player);
+    }
     const minInterval = 1e3 / definition.fireRate;
     if (now - player.lastWeaponFireAt < minInterval * 0.92) {
       return;
@@ -1059,27 +1632,20 @@ var LobbyRoom = class {
       const pelletDirection = definition.pellets === 1 ? direction : jitterDirection(direction, definition.spread[weapon.rarity], random);
       let bestHit = null;
       for (const target of this.getJoinedPlayers()) {
-        if (target.id === player.id || target.playerPhase !== MATCH_PHASES.active) {
+        if (target.id === player.id || target.playerPhase !== PLAYER_STATES.active || !target.roundParticipant || target.isEliminated) {
           continue;
         }
-        const center = {
-          x: target.pose.x,
-          y: target.pose.y + 0.95,
-          z: target.pose.z
-        };
-        const hitDistance = raySphereDistance(origin, pelletDirection, center, 0.78, definition.maxRange);
-        if (!Number.isFinite(hitDistance)) {
+        const hit = resolvePlayerHit(origin, pelletDirection, target, definition.maxRange);
+        if (!hit) {
           continue;
         }
-        if (!bestHit || hitDistance < bestHit.distance) {
+        if (!bestHit || hit.distance < bestHit.distance) {
           bestHit = {
             target,
-            distance: hitDistance,
-            impactPoint: {
-              x: origin.x + pelletDirection.x * hitDistance,
-              y: origin.y + pelletDirection.y * hitDistance,
-              z: origin.z + pelletDirection.z * hitDistance
-            },
+            distance: hit.distance,
+            impactPoint: hit.impactPoint,
+            headshot: hit.headshot,
+            hitRegion: hit.hitRegion,
             pelletDirection
           };
         }
@@ -1092,10 +1658,15 @@ var LobbyRoom = class {
         target: bestHit.target,
         damage: 0,
         pellets: 0,
+        headshotPellets: 0,
+        headshot: false,
         impactPoint: bestHit.impactPoint
       };
-      existing.damage += definition.damage[weapon.rarity];
+      const pelletDamage = bestHit.headshot ? Math.round(definition.damage[weapon.rarity] * HEADSHOT_DAMAGE_MULTIPLIER) : definition.damage[weapon.rarity];
+      existing.damage += pelletDamage;
       existing.pellets += 1;
+      existing.headshotPellets += bestHit.headshot ? 1 : 0;
+      existing.headshot = existing.headshot || bestHit.headshot;
       existing.impactPoint = bestHit.impactPoint;
       hitsByTarget.set(bestHit.target.id, existing);
     }
@@ -1114,9 +1685,18 @@ var LobbyRoom = class {
       }
     }, player.id);
     for (const hit of hitsByTarget.values()) {
+      const targetTick = this.syncPlayerRoundState(hit.target, now);
+      if (targetTick.statsChanged && !targetTick.died) {
+        this.broadcastPresenceUpdate(hit.target);
+      }
+      if (targetTick.died || hit.target.isEliminated || hit.target.playerPhase !== PLAYER_STATES.active) {
+        continue;
+      }
+      hit.target.lastDamagedByPlayerId = player.id;
       const nextHemorrhoids = Math.min(100, hit.target.serverHemorrhoids + hit.damage);
       hit.target.serverHemorrhoids = nextHemorrhoids;
       this.updateAttachment(hit.target);
+      this.broadcastPresenceUpdate(hit.target);
       this.broadcast({
         type: "combat-event",
         kind: COMBAT_EVENT_KINDS.weaponHit,
@@ -1127,12 +1707,19 @@ var LobbyRoom = class {
           weaponRarity: weapon.rarity,
           damage: hit.damage,
           pellets: hit.pellets,
+          headshot: hit.headshot,
+          headshotPellets: hit.headshotPellets,
           impactPoint: sanitizeVector3(hit.impactPoint),
           at: now,
           nextHemorrhoids
         }
       });
       if (nextHemorrhoids >= 100) {
+        this.resolvePlayerDeath(hit.target, {
+          attackerPlayerId: player.id,
+          cause: "weapon",
+          now
+        });
         this.broadcast({
           type: "combat-event",
           kind: COMBAT_EVENT_KINDS.playerEliminated,
@@ -1146,6 +1733,7 @@ var LobbyRoom = class {
         });
       }
     }
+    this.evaluateRoundState(now, false);
   }
   handleWorldEvent(player, event) {
     if (!player.joined || !event?.kind) {
@@ -1178,29 +1766,60 @@ var LobbyRoom = class {
     if (!targetPlayer?.joined) {
       return;
     }
-    if (player.playerPhase !== MATCH_PHASES.active || targetPlayer.playerPhase !== MATCH_PHASES.active) {
+    if (player.playerPhase !== PLAYER_STATES.active || targetPlayer.playerPhase !== PLAYER_STATES.active || !player.roundParticipant || !targetPlayer.roundParticipant || player.isEliminated || targetPlayer.isEliminated || this.matchState.phase !== MATCH_PHASES.active && this.matchState.phase !== MATCH_PHASES.overtime) {
       return;
     }
+    const now = Date.now();
+    const attackerTick = this.syncPlayerRoundState(player, now);
+    if (attackerTick.statsChanged && !attackerTick.died) {
+      this.broadcastPresenceUpdate(player);
+    }
+    if (attackerTick.died) {
+      return;
+    }
+    const targetTick = this.syncPlayerRoundState(targetPlayer, now);
+    if (targetTick.statsChanged && !targetTick.died) {
+      this.broadcastPresenceUpdate(targetPlayer);
+    }
+    if (targetTick.died || targetPlayer.isEliminated || targetPlayer.playerPhase !== PLAYER_STATES.active) {
+      return;
+    }
+    targetPlayer.lastDamagedByPlayerId = player.id;
+    const nextHemorrhoids = Math.min(100, targetPlayer.serverHemorrhoids + 8.5);
+    targetPlayer.serverHemorrhoids = nextHemorrhoids;
+    targetPlayer.lastRoundTickAt = now;
+    this.updateAttachment(targetPlayer);
+    this.broadcastPresenceUpdate(targetPlayer);
     this.broadcast(
       {
         type: "world-event",
         playerId: player.id,
         event: {
           kind: WORLD_EVENT_KINDS.playerHit,
-          at: Date.now(),
+          at: now,
           targetPlayerId,
           impactPoint: sanitizeVector3(
             event.impactPoint,
             targetPlayer.pose ?? createSpawnPose(targetPlayer.playerPhase)
           ),
-          velocity: sanitizeVector3(event.velocity)
+          velocity: sanitizeVector3(event.velocity),
+          damage: 8.5,
+          nextHemorrhoids
         }
       },
       player.id
     );
+    if (nextHemorrhoids >= 100) {
+      this.resolvePlayerDeath(targetPlayer, {
+        attackerPlayerId: player.id,
+        cause: "melee",
+        now
+      });
+    }
+    this.evaluateRoundState(now, false);
   }
   startToiletSearch(player, toiletId) {
-    if (!player.joined || player.playerPhase !== MATCH_PHASES.active) {
+    if (!player.joined || player.playerPhase !== PLAYER_STATES.active || this.matchState.phase !== MATCH_PHASES.active && this.matchState.phase !== MATCH_PHASES.overtime) {
       return;
     }
     const toilet = this.toilets.get(toiletId);
@@ -1260,7 +1879,7 @@ var LobbyRoom = class {
     if (!toilet || !player || toilet.searchingPlayerId !== playerId || !toilet.weapon) {
       return;
     }
-    if (!player.joined || player.playerPhase !== MATCH_PHASES.active || planarDistance(player.pose, toilet.position) > TOILET_INTERACT_RANGE) {
+    if (!player.joined || player.playerPhase !== PLAYER_STATES.active || this.matchState.phase !== MATCH_PHASES.active && this.matchState.phase !== MATCH_PHASES.overtime || planarDistance(player.pose, toilet.position) > TOILET_INTERACT_RANGE) {
       this.cancelPlayerSearch(player);
       return;
     }
@@ -1312,7 +1931,7 @@ var LobbyRoom = class {
     });
   }
   pickupGroundLoot(player, groundLootId) {
-    if (!player.joined || player.playerPhase !== MATCH_PHASES.active) {
+    if (!player.joined || player.playerPhase !== PLAYER_STATES.active || this.matchState.phase !== MATCH_PHASES.active && this.matchState.phase !== MATCH_PHASES.overtime) {
       return;
     }
     const groundLoot = this.groundLoot.get(groundLootId);
@@ -1396,25 +2015,11 @@ var LobbyRoom = class {
       return;
     }
     this.reconcileMatchState(true);
+    this.evaluateRoundState(Date.now(), true);
   }
   onPhaseTimer() {
     const now = Date.now();
-    if (this.matchState.phase === MATCH_PHASES.countdown && Number.isFinite(this.matchState.countdownEndsAt) && now >= this.matchState.countdownEndsAt) {
-      if (this.canStartCountdown()) {
-        this.startBusPhase();
-      } else {
-        this.matchState = createMatchState();
-        this.applyPlayerPhaseToJoinedPlayers(MATCH_PHASES.staging);
-        this.broadcastMatchState();
-        this.schedulePhaseTimer();
-      }
-      return;
-    }
-    if (this.matchState.phase === MATCH_PHASES.bus && Number.isFinite(this.matchState.busEndsAt) && now >= this.matchState.busEndsAt) {
-      this.enterActivePhase();
-      return;
-    }
-    this.schedulePhaseTimer();
+    this.evaluateRoundState(now, true);
   }
   canStartCountdown() {
     const joinedPlayers = this.getJoinedPlayers();
@@ -1427,7 +2032,7 @@ var LobbyRoom = class {
       this.clearPhaseTimer();
       return;
     }
-    if (this.matchState.phase === MATCH_PHASES.bus || this.matchState.phase === MATCH_PHASES.active) {
+    if (this.matchState.phase === MATCH_PHASES.bus || this.matchState.phase === MATCH_PHASES.active || this.matchState.phase === MATCH_PHASES.overtime || this.matchState.phase === MATCH_PHASES.results) {
       if (shouldBroadcast) {
         this.broadcastMatchState();
       }
@@ -1442,41 +2047,53 @@ var LobbyRoom = class {
           countdownEndsAt: Date.now() + COUNTDOWN_DURATION_MS
         };
       }
-      this.applyPlayerPhaseToJoinedPlayers(MATCH_PHASES.staging);
+      this.applyPlayerPhaseToJoinedPlayers(PLAYER_STATES.staging);
       this.broadcastMatchState();
       this.schedulePhaseTimer();
       return;
     }
     this.matchState = createMatchState();
-    this.applyPlayerPhaseToJoinedPlayers(MATCH_PHASES.staging);
+    this.applyPlayerPhaseToJoinedPlayers(PLAYER_STATES.staging);
     if (shouldBroadcast) {
       this.broadcastMatchState();
     }
     this.schedulePhaseTimer();
   }
-  startBusPhase() {
-    this.matchState = getBusSchedule(Date.now());
+  startBusPhase(now = Date.now()) {
+    const busSchedule = getBusSchedule(now);
+    const activeStartedAt = busSchedule.doorsOpenAt;
+    this.matchState = {
+      ...busSchedule,
+      activeStartedAt,
+      activeEndsAt: Number.isFinite(activeStartedAt) ? activeStartedAt + ROUND_ACTIVE_DURATION_MS : null,
+      remainingContenders: this.getJoinedPlayerCount()
+    };
     this.resetLootState();
-    this.applyPlayerPhaseToJoinedPlayers(MATCH_PHASES.bus);
     for (const player of this.getJoinedPlayers()) {
-      this.cancelPlayerSearch(player);
-      player.ready = false;
-      player.actionState.poopActive = false;
-      this.resetPlayerCombatState(player);
+      this.initializePlayerForRound(player, PLAYER_STATES.bus, now);
       this.sendToPlayer(player, serializeLoadoutState(player));
     }
     this.broadcast(serializeLootState(this));
     this.broadcastMatchState();
     this.schedulePhaseTimer();
   }
-  enterActivePhase() {
+  enterActivePhase(now = Date.now()) {
+    const activeStartedAt = Number.isFinite(this.matchState.activeStartedAt) ? this.matchState.activeStartedAt : now;
+    const previousBusState = this.matchState;
     this.matchState = {
       ...createMatchState(),
-      phase: MATCH_PHASES.active
+      busStartedAt: previousBusState.busStartedAt ?? null,
+      doorsOpenAt: previousBusState.doorsOpenAt ?? null,
+      autoDropAt: previousBusState.autoDropAt ?? null,
+      busEndsAt: previousBusState.busEndsAt ?? null,
+      phase: MATCH_PHASES.active,
+      activeStartedAt,
+      activeEndsAt: Number.isFinite(this.matchState.activeEndsAt) ? this.matchState.activeEndsAt : activeStartedAt + ROUND_ACTIVE_DURATION_MS,
+      remainingContenders: this.getContenderPlayers().length
     };
     for (const player of this.getJoinedPlayers()) {
-      if (player.playerPhase === MATCH_PHASES.bus) {
-        player.playerPhase = MATCH_PHASES.active;
+      if (player.roundParticipant) {
+        player.lastRoundTickAt = now;
         this.updateAttachment(player);
       }
     }
@@ -1484,17 +2101,17 @@ var LobbyRoom = class {
     this.schedulePhaseTimer();
   }
   getInitialPlayerPhase() {
-    if (this.matchState.phase === MATCH_PHASES.bus) {
-      return MATCH_PHASES.bus;
+    if (this.isRoundJoinLocked()) {
+      return PLAYER_STATES.spectating;
     }
-    if (this.matchState.phase === MATCH_PHASES.active) {
-      return MATCH_PHASES.active;
-    }
-    return MATCH_PHASES.staging;
+    return PLAYER_STATES.staging;
   }
   applyPlayerPhaseToJoinedPlayers(phase) {
     for (const player of this.getJoinedPlayers()) {
       player.playerPhase = phase;
+      player.pose = createSpawnPose(phase);
+      player.actionState.poopActive = false;
+      player.lastRoundTickAt = Date.now();
       this.updateAttachment(player);
     }
   }
@@ -1513,6 +2130,7 @@ var LobbyRoom = class {
   serializeMatchState() {
     return {
       ...this.matchState,
+      remainingContenders: this.getContenderPlayers().length,
       playerCount: this.getJoinedPlayerCount(),
       readyCount: this.getReadyCount(),
       players: this.getJoinedPlayers().map(serializePlayerSnapshot)
@@ -1543,11 +2161,18 @@ var LobbyRoom = class {
   }
   schedulePhaseTimer() {
     this.clearPhaseTimer();
-    const targetTime = this.matchState.phase === MATCH_PHASES.countdown ? this.matchState.countdownEndsAt : this.matchState.phase === MATCH_PHASES.bus ? this.matchState.busEndsAt : null;
-    if (!Number.isFinite(targetTime)) {
+    const targetTime = this.matchState.phase === MATCH_PHASES.countdown ? this.matchState.countdownEndsAt : this.matchState.phase === MATCH_PHASES.bus ? Number.isFinite(this.matchState.activeStartedAt) ? this.matchState.activeStartedAt : this.matchState.busEndsAt : this.matchState.phase === MATCH_PHASES.active ? this.matchState.activeEndsAt : this.matchState.phase === MATCH_PHASES.overtime ? this.matchState.overtimeEndsAt : this.matchState.phase === MATCH_PHASES.results ? this.matchState.resultsEndsAt : null;
+    let nextTime = targetTime;
+    for (const player of this.getJoinedPlayers()) {
+      if (!Number.isFinite(player.respawnAt)) {
+        continue;
+      }
+      nextTime = Number.isFinite(nextTime) ? Math.min(nextTime, player.respawnAt) : player.respawnAt;
+    }
+    if (!Number.isFinite(nextTime)) {
       return;
     }
-    const waitMs = Math.max(0, targetTime - Date.now());
+    const waitMs = Math.max(0, nextTime - Date.now());
     this.phaseTimer = setTimeout(() => {
       this.phaseTimer = null;
       this.onPhaseTimer();
@@ -1598,7 +2223,14 @@ var LobbyRoom = class {
       loadout: serializeLoadout(player),
       equippedSlot: clampNumber(player.equippedSlot, 0, WEAPON_SLOT_COUNT - 1, 0),
       serverHemorrhoids: player.serverHemorrhoids ?? 0,
-      lastWeaponFireAt: player.lastWeaponFireAt ?? 0
+      lastWeaponFireAt: player.lastWeaponFireAt ?? 0,
+      scoreMeters: player.scoreMeters ?? 0,
+      livesRemaining: player.livesRemaining ?? PLAYER_LIVES,
+      roundParticipant: Boolean(player.roundParticipant),
+      respawnAt: player.respawnAt ?? null,
+      isEliminated: Boolean(player.isEliminated),
+      lastRoundTickAt: player.lastRoundTickAt ?? 0,
+      lastDamagedByPlayerId: player.lastDamagedByPlayerId ?? null
     });
   }
   broadcast(message, excludedPlayerId = null) {
@@ -1653,7 +2285,7 @@ var jsonError = /* @__PURE__ */ __name(async (request, env, _ctx, middlewareCtx)
 }, "jsonError");
 var middleware_miniflare3_json_error_default = jsonError;
 
-// .wrangler/tmp/bundle-zCq8iL/middleware-insertion-facade.js
+// .wrangler/tmp/bundle-oZC0qa/middleware-insertion-facade.js
 var __INTERNAL_WRANGLER_MIDDLEWARE__ = [
   middleware_ensure_req_body_drained_default,
   middleware_miniflare3_json_error_default
@@ -1685,7 +2317,7 @@ function __facade_invoke__(request, env, ctx, dispatch, finalMiddleware) {
 }
 __name(__facade_invoke__, "__facade_invoke__");
 
-// .wrangler/tmp/bundle-zCq8iL/middleware-loader.entry.ts
+// .wrangler/tmp/bundle-oZC0qa/middleware-loader.entry.ts
 var __Facade_ScheduledController__ = class ___Facade_ScheduledController__ {
   constructor(scheduledTime, cron, noRetry) {
     this.scheduledTime = scheduledTime;

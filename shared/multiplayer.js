@@ -37,6 +37,7 @@ export const PHONE_PRESSURE_NEARBY_MAX = 0.4;
 export const PHONE_HEMORRHOIDS_ON_PHONE_PER_SECOND = 17;
 export const PHONE_HEMORRHOIDS_NEARBY_BASE_PER_SECOND = 2;
 export const PHONE_HEMORRHOIDS_NEARBY_EXTRA_PER_SECOND = 9;
+export const PHONE_ROTATION_Y = -0.32;
 export const PHONE_STAND_BOUNDS = Object.freeze({
   halfX: 3.1 * 0.49,
   halfZ: 6.8 * 0.49,

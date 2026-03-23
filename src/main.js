@@ -21,6 +21,7 @@ import {
   LOBBY_LABELS,
   MAX_PLAYERS_PER_LOBBY,
   MIN_PLAYERS_TO_START,
+  PHONE_ROTATION_Y,
   PLAYER_STATES,
   PLAYER_SPAWN,
   ROUND_END_REASONS,
@@ -3950,7 +3951,7 @@ function createPhone() {
 
   const group = new THREE.Group();
   group.position.copy(world.phoneCenter);
-  group.rotation.y = -0.32;
+  group.rotation.y = PHONE_ROTATION_Y;
 
   const body = new THREE.Mesh(
     new THREE.BoxGeometry(phoneMetrics.width, phoneMetrics.thickness, phoneMetrics.length),
