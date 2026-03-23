@@ -123,6 +123,16 @@ function planarDistance(a, b) {
   return Math.hypot((a?.x ?? 0) - (b?.x ?? 0), (a?.z ?? 0) - (b?.z ?? 0));
 }
 
+function getTargetHitHemorrhoidRelief(velocity) {
+  const hitForce = clampNumber(
+    Math.hypot(velocity?.x ?? 0, velocity?.y ?? 0, velocity?.z ?? 0) * 0.06,
+    1.2,
+    2.4,
+    1.2,
+  );
+  return 18 + hitForce * 2.4;
+}
+
 function getPhonePressureState(pose) {
   const cosRotation = Math.cos(-PHONE_ROTATION_Y);
   const sinRotation = Math.sin(-PHONE_ROTATION_Y);
@@ -1643,15 +1653,45 @@ export class LobbyRoom {
     }
 
     if (event.kind === WORLD_EVENT_KINDS.targetHit) {
+      if (
+        player.playerPhase !== PLAYER_STATES.active ||
+        !player.roundParticipant ||
+        player.isEliminated ||
+        (this.matchState.phase !== MATCH_PHASES.active && this.matchState.phase !== MATCH_PHASES.overtime)
+      ) {
+        return;
+      }
+
+      const now = Date.now();
+      const tick = this.syncPlayerRoundState(player, now);
+      if (tick.statsChanged && !tick.died) {
+        this.broadcastPresenceUpdate(player);
+      }
+      if (tick.died || player.isEliminated || player.playerPhase !== PLAYER_STATES.active) {
+        return;
+      }
+
+      const previousHemorrhoids = player.serverHemorrhoids ?? 0;
+      const nextHemorrhoids = Math.max(
+        0,
+        previousHemorrhoids - getTargetHitHemorrhoidRelief(event.velocity),
+      );
+      if (nextHemorrhoids !== previousHemorrhoids) {
+        player.serverHemorrhoids = nextHemorrhoids;
+        this.updateAttachment(player);
+        this.broadcastPresenceUpdate(player);
+      }
+
       this.broadcast(
         {
           type: "world-event",
           playerId: player.id,
           event: {
             kind: WORLD_EVENT_KINDS.targetHit,
-            at: Date.now(),
+            at: now,
             impactPoint: sanitizeVector3(event.impactPoint),
             velocity: sanitizeVector3(event.velocity),
+            nextHemorrhoids,
           },
         },
         player.id,

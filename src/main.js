@@ -7745,8 +7745,8 @@ function registerTargetHit(impactPoint, velocity, options = {}) {
 
   setMessage(
     hitForce > 1.6
-      ? "Klockren smäll. Han gungar till där ute i öknen."
-      : "Perfekt smocka. Han tog träffen rakt i sidan.",
+      ? "Klockren smäll. Han gungar till och trycket ska sjunka."
+      : "Perfekt smocka. Han tog träffen och hemorojdrisken ska ner.",
   );
   updateHud();
 }

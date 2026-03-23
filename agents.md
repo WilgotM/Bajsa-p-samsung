@@ -60,6 +60,7 @@ Det här är ett litet 3D-webbspel byggt med Vite och Three.js.
 - Håller man vänsterklick på telefonen fortsätter bajs-mekaniken som tidigare.
 - Träff på annan spelare i samma lobby skickas som `player-hit` via Workern.
 - Spelaren som blir träffad får ökad hemorojdrisk, men med låg handskada (förberett för framtida vapenbalans).
+- Öken-mannen ska fortfarande fungera som lättnadsmål: när en spelare träffar honom ska spelarens egen hemorojdrisk sjunka igen, och i multiplayer måste den sänkningen göras server-auktoritativt i Workern.
 
 ## Vapen
 
