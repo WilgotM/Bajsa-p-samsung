@@ -18,20 +18,39 @@ Det här är ett litet 3D-webbspel byggt med Vite och Three.js.
 - `GET /connect/:lobbyId` öppnar WebSocket-anslutningen till rätt lobby.
 - Startmenyn har en `Spela solo`-knapp som går till `solo`-lobbyn och auto-sätter `Ready` för snabb teststart.
 - Matchflödet är serverstyrt och går genom faserna `staging` -> `countdown` -> `bus` -> `glide` -> `active`.
+- När `active` börjar körs själva turneringen i `180s`. Workern kan sedan gå vidare till `overtime` och `results`.
 - Countdown startar när minst en spelare är i samma lobby och alla anslutna spelare i den lobbyn har markerat `Ready` (så solo-test funkar).
-- Workern skickar `match-state` till klienterna med `phase`, `readyCount`, `countdownEndsAt` och battle bus-tidsstämplar.
+- Workern skickar `match-state` till klienterna med `phase`, `readyCount`, `countdownEndsAt`, battle bus-tidsstämplar, samt rundfält som `activeEndsAt`, `overtimeEndsAt`, `resultsEndsAt`, `remainingContenders`, `winnerPlayerId` och `winnerReason`.
 - Klienten kan skicka `ready` och `player-state` över WebSocket för att toggla redo-status och rapportera lokala fasbyten som glid/landning.
+- Spelare som joinar under `bus`, `active`, `overtime` eller `results` blir spectator för pågående runda och blir riktiga deltagare först nästa `staging`.
 
 ## Vad som synkas
 
 - Spelarens position, yaw och rörelsehastighet synkas mellan datorer.
 - Spelarens ready-status, namn, Minecraft-skin och nuvarande fas synkas också för väntelobbyn och battle bus-fasen.
+- Spelarsnapshots innehåller också runddata som `scoreMeters`, `livesRemaining`, `hemorrhoids`, `roundParticipant`, `respawnAt` och `isEliminated`.
 - Gameplay-händelser synkas också, till exempel:
   - `poop-start`
   - `poop-stop`
   - `strike`
   - `target-hit`
   - `player-hit` (när en spelare träffar en annan med handslag)
+- Workern skickar dessutom `round-event` för `player-died`, `player-respawned`, `player-eliminated`, `overtime-started` och `match-ended`.
+
+## Turneringsregler
+
+- Varje deltagare har `3 liv`.
+- Score är server-auktoritativ och mäts som `scoreMeters`. Den ökar bara när spelaren faktiskt bajsar under `active`/`overtime`.
+- När hemorojdrisken når `100` dör spelaren, all spelarens bajsscore nollas, spelarens bajsvisualer ska bort och spelaren går kort in i spectatorläge.
+- Om spelaren har liv kvar redeployas spelaren från luften igen i `glide` efter ungefär `2.5s`.
+- Om liv når `0` blir spelaren permanent eliminerad för rundan.
+- I multiplayer avslutas rundan direkt om exakt en contender med liv kvar återstår.
+- I solo avslutas rundan inte bara för att “en kvar” återstår, men om alla 3 liv tar slut blir det direkt `solo-loss`.
+- När ordinarie tid tar slut:
+  - ensam ledare med score > 0 vinner på tid
+  - om alla står på `0` vinner `Samsungen`
+  - om flera delar ledningen startar `20s` bajsoff i `overtime`
+- Om bajsoffen tar slut utan ensam ledare vinner också `Samsungen`
 
 ## PvP (handslag)
 
@@ -50,7 +69,9 @@ Det här är ett litet 3D-webbspel byggt med Vite och Three.js.
 - Loadouten är server-auktoritativ och skickas till klienten som `loadout-state`.
 - Klienten kan byta slot med `equip-slot` och skjuta med `fire-weapon`.
 - Vapen är hitscan och valideras av Workern med fire rate, range och målträff innan skada delas ut.
-- Vapenskada ökar samma hemorojdmätare som övrig gameplay. Vid `100` skickas `player-eliminated`.
+- Shotgunen är avsiktligt balanserad som ett Fortnite-liknande pumpval: hög närskadeburst, tajtare spread och kort effektiv range jämfört med rifle/SMG.
+- Headshots gör lite mer skada än träffar på resten av kroppen.
+- Vapenskada ökar samma hemorojdmätare som övrig gameplay. Vid `100` triggas samma death/respawn-logik som annan överbelastning.
 - Toilet-loot och mark-loot är tillfälligt avstängt. Tanken är att uppgraderingar/loot kommer tillbaka senare i en enklare iteration.
 
 ## Spelarprofiler och skins
@@ -68,6 +89,15 @@ Det här är ett litet 3D-webbspel byggt med Vite och Three.js.
 - Dörrarna öppnas först när bussen är över ön, och då visas en tydlig `Space`-prompt.
 - Spelare som inte hoppar själva auto-droppas nära slutet av bussrutten.
 - Under `glide` sjunker spelaren långsamt och kan styra lite i luften innan vanlig gameplay tar vid på ön.
+- När en spelare dör under rundan används samma glide/redeploy-känsla igen i stället för en vanlig markrespawn.
+
+## UI och spectator
+
+- Leaderboarden ska använda serverns `scoreMeters`, inte lokalt uppmätta rep-längder.
+- Klienten har ett riktigt spectator-läge med auto-följ på annan aktiv spelare och `Q/E` för att byta mål.
+- Det finns nu top-HUD för timer, contenders, liv och egen score, elimination-overlay för död/respawn, samt en full results/victory-skärm.
+- När en spelare tar skada blinkar avataren rött kort och flytande skadesiffror visas ovanför spelaren med samma teckensnitt som resten av spelet.
+- Om `winnerReason` är `samsung-survived` visas en egen Samsung-specialskärm i resultaten.
 
 ## Cloudflare
 

@@ -140,8 +140,33 @@
       </section>
 
       <section id="leaderboard" class="leaderboard hidden">
-        <div class="leaderboard__title">TOPPLISTA</div>
+        <div class="leaderboard__title">BAJSLIGA</div>
         <div id="leaderboard-entries" class="leaderboard__entries"></div>
+      </section>
+
+      <section id="top-hud" class="top-hud hidden" aria-live="polite">
+        <div class="top-hud__card">
+          <span class="top-hud__label">TID</span>
+          <strong id="top-hud-timer" class="top-hud__value">3:00</strong>
+        </div>
+        <div class="top-hud__card">
+          <span class="top-hud__label">KVAR</span>
+          <strong id="top-hud-contenders" class="top-hud__value">1</strong>
+        </div>
+        <div class="top-hud__card">
+          <span class="top-hud__label">LIV</span>
+          <strong id="top-hud-lives" class="top-hud__value">3</strong>
+        </div>
+        <div class="top-hud__card top-hud__card--score">
+          <span class="top-hud__label">DIN BAJSLÄNGD</span>
+          <strong id="top-hud-score" class="top-hud__value">0.0m</strong>
+        </div>
+      </section>
+
+      <section id="spectator-overlay" class="spectator-overlay hidden" aria-live="polite">
+        <span class="spectator-overlay__label">ÅSKÅDAR</span>
+        <strong id="spectator-target-name" class="spectator-overlay__name">VÄNTAR PÅ SPELARE</strong>
+        <span id="spectator-overlay-meta" class="spectator-overlay__meta">Q / E för att byta mål</span>
       </section>
 
       <section class="hud hud-bottom">
@@ -204,8 +229,24 @@
       </section>
 
       <section id="game-over" class="game-over hidden" aria-live="polite">
-        <h2>ELIMINERAD</h2>
-        <p>Startar om...</p>
+        <div class="game-over__banner">
+          <h2 id="game-over-title">ELIMINERAD!</h2>
+          <p id="game-over-subtitle">Du redeployar snart från luften.</p>
+          <strong id="game-over-meta">3 liv kvar</strong>
+        </div>
+      </section>
+
+      <section id="results-screen" class="results-screen hidden" aria-live="assertive">
+        <div id="results-card" class="results-screen__card">
+          <span id="results-kicker" class="results-screen__kicker">TURNERING KLAR</span>
+          <h2 id="results-title" class="results-screen__title">#1 BAJS ROYALE</h2>
+          <p id="results-subtitle" class="results-screen__subtitle">Du toppade ligan när tiden tog slut.</p>
+          <strong id="results-meta" class="results-screen__meta">Din längd: 0.0m</strong>
+          <button id="results-leave-btn" class="fn-button fn-primary results-screen__button" type="button">
+            <span class="btn-text">TILL LOBBYN</span>
+            <span class="btn-meta">Stäng rundan direkt</span>
+          </button>
+        </div>
       </section>
 
       <section id="pause-menu" class="pause-menu hidden">

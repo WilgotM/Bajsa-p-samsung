@@ -21,7 +21,10 @@ import {
   LOBBY_LABELS,
   MAX_PLAYERS_PER_LOBBY,
   MIN_PLAYERS_TO_START,
+  PLAYER_STATES,
   PLAYER_SPAWN,
+  ROUND_END_REASONS,
+  ROUND_EVENT_KINDS,
   TOILET_INTERACT_RANGE,
   TOILET_SEARCH_DURATION_MS,
   TOILET_SPAWNS,
@@ -81,6 +84,24 @@ const lobbyPlayerListEl = document.querySelector("#lobby-player-list");
 const announcementBannerEl = document.querySelector("#announcement-banner");
 const announcementTextEl = document.querySelector("#announcement-text");
 const jumpPromptEl = document.querySelector("#jump-prompt");
+const topHudEl = document.querySelector("#top-hud");
+const topHudTimerEl = document.querySelector("#top-hud-timer");
+const topHudContendersEl = document.querySelector("#top-hud-contenders");
+const topHudLivesEl = document.querySelector("#top-hud-lives");
+const topHudScoreEl = document.querySelector("#top-hud-score");
+const spectatorOverlayEl = document.querySelector("#spectator-overlay");
+const spectatorTargetNameEl = document.querySelector("#spectator-target-name");
+const spectatorOverlayMetaEl = document.querySelector("#spectator-overlay-meta");
+const gameOverTitleEl = document.querySelector("#game-over-title");
+const gameOverSubtitleEl = document.querySelector("#game-over-subtitle");
+const gameOverMetaEl = document.querySelector("#game-over-meta");
+const resultsScreenEl = document.querySelector("#results-screen");
+const resultsCardEl = document.querySelector("#results-card");
+const resultsKickerEl = document.querySelector("#results-kicker");
+const resultsTitleEl = document.querySelector("#results-title");
+const resultsSubtitleEl = document.querySelector("#results-subtitle");
+const resultsMetaEl = document.querySelector("#results-meta");
+const resultsLeaveBtn = document.querySelector("#results-leave-btn");
 
 const pauseMenuEl = document.querySelector("#pause-menu");
 const resumeBtn = document.querySelector("#resume-btn");
@@ -113,6 +134,16 @@ if (quitBtn) {
     pauseMenuEl.classList.add("hidden");
     setMenuOpen(true);
     multiplayer.disconnect(true);
+    if (document.pointerLockElement) {
+      document.exitPointerLock();
+    }
+  });
+}
+
+if (resultsLeaveBtn) {
+  resultsLeaveBtn.addEventListener("click", () => {
+    multiplayer.disconnect(true);
+    setMenuOpen(true);
     if (document.pointerLockElement) {
       document.exitPointerLock();
     }
@@ -293,6 +324,13 @@ const weaponVisualConfig = {
   hitmarkerLife: 0.12,
   toastLife: 1.1,
 };
+const combatFeedbackConfig = {
+  avatarFlashLife: 0.2,
+  damageNumberLife: 0.72,
+  damageNumberRise: 0.9,
+  damageNumberScale: 1.28,
+  damageNumberBaseY: 0.62,
+};
 
 const poopConfig = {
   standX: phoneMetrics.width * 0.49,
@@ -472,6 +510,7 @@ const aimMarker = createAimMarker();
 const dangerRing = createDangerRing();
 const standingTarget = createStandingTarget();
 const hero = buildHero();
+ensureAvatarCombatFeedback(hero);
 const weaponRoot = new THREE.Group();
 const toiletsRoot = new THREE.Group();
 const groundLootRoot = new THREE.Group();
@@ -525,6 +564,9 @@ const multiplayerState = {
   remotePlayers: new Map(),
   playerRoster: new Map(),
   menuOpen: true,
+  spectatorTargetId: null,
+  lastPhaseResyncAt: 0,
+  lastPoopResyncAt: 0,
 };
 
 const multiplayer = new MultiplayerClient({
@@ -540,6 +582,7 @@ const multiplayer = new MultiplayerClient({
   onLoadoutState: handleLoadoutStateMessage,
   onCombatEvent: handleCombatEventMessage,
   onWorldEvent: handleLobbyWorldEvent,
+  onRoundEvent: handleRoundEventMessage,
   onError: handleMultiplayerError,
 });
 
@@ -1124,6 +1167,172 @@ function triggerHitmarker() {
   hitmarkerEl?.classList.remove("hidden");
 }
 
+function ensureAvatarCombatFeedback(avatar) {
+  if (avatar.damagePopupRoot) {
+    return avatar.damagePopupRoot;
+  }
+
+  const popupRoot = new THREE.Group();
+  popupRoot.position.y = combatFeedbackConfig.damageNumberBaseY;
+  avatar.nameTagAnchor.add(popupRoot);
+  avatar.damagePopupRoot = popupRoot;
+  avatar.damageNumbers = [];
+  avatar.damageFlashTimer = 0;
+  avatar.damageFlashHeadshot = false;
+  avatar.baseSkinMaterial.emissive.setRGB(1, 0.08, 0.08);
+  avatar.baseSkinMaterial.emissiveIntensity = 0;
+  avatar.overlaySkinMaterial.emissive.setRGB(1, 0.12, 0.12);
+  avatar.overlaySkinMaterial.emissiveIntensity = 0;
+  avatar.baseSkinMaterial.color.setRGB(1, 1, 1);
+  avatar.overlaySkinMaterial.color.setRGB(1, 1, 1);
+  return popupRoot;
+}
+
+function formatDamageNumber(damage) {
+  if (!Number.isFinite(damage)) {
+    return "0";
+  }
+
+  const rounded = Math.round(damage * 10) / 10;
+  return Number.isInteger(rounded) ? `${rounded}` : rounded.toFixed(1);
+}
+
+function createDamageNumberSprite(damage, headshot = false) {
+  const canvas = document.createElement("canvas");
+  canvas.width = 384;
+  canvas.height = 192;
+  const context = canvas.getContext("2d");
+  const value = formatDamageNumber(damage);
+
+  context.clearRect(0, 0, canvas.width, canvas.height);
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+
+  if (headshot) {
+    context.font = '900 42px "Luckiest Guy", cursive';
+    context.fillStyle = "#fff4a3";
+    context.strokeStyle = "rgba(100, 28, 0, 0.95)";
+    context.lineWidth = 14;
+    context.strokeText("HEADSHOT!", canvas.width / 2, 44);
+    context.fillText("HEADSHOT!", canvas.width / 2, 44);
+  }
+
+  context.font = '900 116px "Luckiest Guy", cursive';
+  context.fillStyle = headshot ? "#ffe45c" : "#ffffff";
+  context.strokeStyle = headshot ? "rgba(146, 36, 0, 0.98)" : "rgba(177, 24, 24, 0.98)";
+  context.lineJoin = "round";
+  context.lineWidth = 22;
+  context.strokeText(value, canvas.width / 2, headshot ? 124 : 108);
+  context.fillText(value, canvas.width / 2, headshot ? 124 : 108);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.needsUpdate = true;
+  const material = new THREE.SpriteMaterial({
+    map: texture,
+    transparent: true,
+    depthWrite: false,
+    depthTest: false,
+  });
+  const sprite = new THREE.Sprite(material);
+  sprite.renderOrder = 1100;
+  sprite.scale.set(
+    combatFeedbackConfig.damageNumberScale * (headshot ? 1.14 : 1),
+    combatFeedbackConfig.damageNumberScale * (headshot ? 0.78 : 0.7),
+    1,
+  );
+
+  return { sprite, material, texture };
+}
+
+function disposeDamageNumberSprite(damageNumber) {
+  damageNumber.sprite.parent?.remove(damageNumber.sprite);
+  damageNumber.texture.dispose();
+  damageNumber.material.dispose();
+}
+
+function triggerAvatarDamageFeedback(avatar, damage, headshot = false) {
+  const popupRoot = ensureAvatarCombatFeedback(avatar);
+  const popup = createDamageNumberSprite(damage, headshot);
+  popup.life = combatFeedbackConfig.damageNumberLife;
+  popup.maxLife = combatFeedbackConfig.damageNumberLife;
+  popup.velocityY = combatFeedbackConfig.damageNumberRise;
+  popup.velocityX = THREE.MathUtils.randFloatSpread(0.28);
+  popup.baseScaleX = popup.sprite.scale.x;
+  popup.baseScaleY = popup.sprite.scale.y;
+  popup.sprite.position.set(
+    THREE.MathUtils.randFloatSpread(0.18),
+    avatar.damageNumbers.length * 0.12,
+    0,
+  );
+  popupRoot.add(popup.sprite);
+  avatar.damageNumbers.push(popup);
+
+  avatar.damageFlashTimer = combatFeedbackConfig.avatarFlashLife;
+  avatar.damageFlashHeadshot = headshot;
+}
+
+function updateAvatarCombatFeedback(avatar, delta) {
+  ensureAvatarCombatFeedback(avatar);
+
+  avatar.damageFlashTimer = Math.max(0, avatar.damageFlashTimer - delta);
+  const flashT =
+    combatFeedbackConfig.avatarFlashLife > 0
+      ? avatar.damageFlashTimer / combatFeedbackConfig.avatarFlashLife
+      : 0;
+  const flashPulse = flashT > 0 ? Math.sin(flashT * Math.PI) : 0;
+  const flashTint = flashPulse * (avatar.damageFlashHeadshot ? 0.5 : 0.34);
+  const emissiveIntensity = flashPulse * (avatar.damageFlashHeadshot ? 1.8 : 1.25);
+  avatar.baseSkinMaterial.color.setRGB(1, 1 - flashTint, 1 - flashTint);
+  avatar.overlaySkinMaterial.color.setRGB(1, 1 - flashTint * 0.9, 1 - flashTint * 0.9);
+  avatar.baseSkinMaterial.emissiveIntensity = emissiveIntensity;
+  avatar.overlaySkinMaterial.emissiveIntensity = emissiveIntensity * 0.92;
+
+  for (let index = avatar.damageNumbers.length - 1; index >= 0; index -= 1) {
+    const damageNumber = avatar.damageNumbers[index];
+    damageNumber.life -= delta;
+    damageNumber.sprite.position.y += damageNumber.velocityY * delta;
+    damageNumber.sprite.position.x += damageNumber.velocityX * delta;
+    damageNumber.material.opacity = THREE.MathUtils.clamp(damageNumber.life / damageNumber.maxLife, 0, 1);
+    const scalePulse = 1 + (1 - damageNumber.material.opacity) * 0.16;
+    damageNumber.sprite.scale.set(
+      damageNumber.baseScaleX * scalePulse,
+      damageNumber.baseScaleY * scalePulse,
+      1,
+    );
+
+    if (damageNumber.life <= 0) {
+      disposeDamageNumberSprite(damageNumber);
+      avatar.damageNumbers.splice(index, 1);
+    }
+  }
+}
+
+function getAvatarForPlayerId(playerId) {
+  if (!playerId) {
+    return null;
+  }
+
+  if (playerId === multiplayerState.selfId) {
+    return hero;
+  }
+
+  const rosterPlayer = multiplayerState.playerRoster.get(playerId);
+  const remotePlayer = rosterPlayer
+    ? ensureRemotePlayer(playerId, rosterPlayer)
+    : multiplayerState.remotePlayers.get(playerId);
+  return remotePlayer?.avatar ?? null;
+}
+
+function showPlayerDamageFeedback(playerId, damage, headshot = false) {
+  const avatar = getAvatarForPlayerId(playerId);
+  if (!avatar || !Number.isFinite(damage) || damage <= 0) {
+    return;
+  }
+
+  triggerAvatarDamageFeedback(avatar, damage, headshot);
+}
+
 function loadToiletModel() {
   gltfLoader.load(
     "/models/game_ready_-_dirty_old_toilet.glb",
@@ -1203,6 +1412,328 @@ function getSortedRosterPlayers() {
   );
 }
 
+function getLocalRosterPlayer() {
+  if (!multiplayerState.selfId) {
+    return null;
+  }
+
+  return multiplayerState.playerRoster.get(multiplayerState.selfId) ?? null;
+}
+
+function isRoundActionPhase(phase = multiplayerState.matchState.phase) {
+  return phase === MATCH_PHASES.active || phase === MATCH_PHASES.overtime;
+}
+
+function isSpectatorState(phase = state.playerPhase) {
+  return phase === PLAYER_STATES.spectating || phase === PLAYER_STATES.eliminated;
+}
+
+function formatMeters(value = 0) {
+  const safeValue = Math.max(0, Number(value) || 0);
+  return `${safeValue >= 100 ? Math.round(safeValue) : safeValue.toFixed(1)}m`;
+}
+
+function formatClockFromMs(ms) {
+  const safeMs = Math.max(0, Number(ms) || 0);
+  const totalSeconds = Math.ceil(safeMs / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+}
+
+function getPlayerDisplayName(playerId, fallback = "Spelare") {
+  if (!playerId) {
+    return fallback;
+  }
+
+  const player = multiplayerState.playerRoster.get(playerId);
+  return player?.name || fallback;
+}
+
+function getSpectatorCandidates() {
+  return Array.from(multiplayerState.playerRoster.values())
+    .filter(
+      (player) =>
+        player.id !== multiplayerState.selfId &&
+        player.roundParticipant &&
+        !player.isEliminated &&
+        (player.playerPhase === PLAYER_STATES.active || player.playerPhase === PLAYER_STATES.glide),
+    )
+    .sort((first, second) => {
+      if ((second.scoreMeters ?? 0) !== (first.scoreMeters ?? 0)) {
+        return (second.scoreMeters ?? 0) - (first.scoreMeters ?? 0);
+      }
+      if ((second.livesRemaining ?? 0) !== (first.livesRemaining ?? 0)) {
+        return (second.livesRemaining ?? 0) - (first.livesRemaining ?? 0);
+      }
+      return (first.guestIndex ?? 0) - (second.guestIndex ?? 0);
+    });
+}
+
+function resolveSpectatorTargetId(preferredPlayerId = null) {
+  const candidates = getSpectatorCandidates();
+  if (candidates.length === 0) {
+    return null;
+  }
+
+  if (preferredPlayerId && candidates.some((player) => player.id === preferredPlayerId)) {
+    return preferredPlayerId;
+  }
+
+  if (
+    multiplayerState.spectatorTargetId &&
+    candidates.some((player) => player.id === multiplayerState.spectatorTargetId)
+  ) {
+    return multiplayerState.spectatorTargetId;
+  }
+
+  return candidates[0].id;
+}
+
+function setSpectatorTarget(playerId = null) {
+  multiplayerState.spectatorTargetId = resolveSpectatorTargetId(playerId);
+}
+
+function cycleSpectatorTarget(direction = 1) {
+  const candidates = getSpectatorCandidates();
+  if (candidates.length === 0) {
+    multiplayerState.spectatorTargetId = null;
+    return;
+  }
+
+  const currentIndex = candidates.findIndex((player) => player.id === multiplayerState.spectatorTargetId);
+  const nextIndex =
+    currentIndex < 0
+      ? 0
+      : (currentIndex + direction + candidates.length) % candidates.length;
+  multiplayerState.spectatorTargetId = candidates[nextIndex].id;
+  syncRoundUi();
+}
+
+function clearOwnedPoop(playerId) {
+  if (!playerId) {
+    return;
+  }
+
+  for (let index = poopRopes.length - 1; index >= 0; index -= 1) {
+    const rope = poopRopes[index];
+    if (rope?.ownerId !== playerId) {
+      continue;
+    }
+    destroyPoopRope(rope);
+    poopRopes.splice(index, 1);
+    if (activePoopRope === rope) {
+      activePoopRope = null;
+    }
+  }
+
+  if (playerId === multiplayerState.selfId) {
+    activePoopRope = null;
+  }
+
+  const remotePlayer = multiplayerState.remotePlayers.get(playerId);
+  if (remotePlayer?.rope) {
+    remotePlayer.rope = null;
+  }
+}
+
+function showEliminationOverlay({
+  title = "ELIMINERAD!",
+  subtitle = "Du spectatar nu.",
+  meta = "",
+} = {}) {
+  if (gameOverTitleEl) {
+    gameOverTitleEl.textContent = title;
+  }
+  if (gameOverSubtitleEl) {
+    gameOverSubtitleEl.textContent = subtitle;
+  }
+  if (gameOverMetaEl) {
+    gameOverMetaEl.textContent = meta;
+  }
+  gameOverEl?.classList.remove("hidden");
+}
+
+function hideEliminationOverlay() {
+  gameOverEl?.classList.add("hidden");
+}
+
+function getRoundResultCopy() {
+  const localPlayer = getLocalRosterPlayer();
+  const winnerId = multiplayerState.matchState.winnerPlayerId ?? null;
+  const winnerName = getPlayerDisplayName(winnerId, "Samsungen");
+  const winnerReason = multiplayerState.matchState.winnerReason ?? "";
+  const localScore = formatMeters(localPlayer?.scoreMeters ?? 0);
+
+  if (winnerReason === ROUND_END_REASONS.samsungSurvived) {
+    return {
+      variant: "samsung",
+      kicker: "SAMSUNGEN ÖVERLEVDE",
+      title: "INGEN SKRAPADE IHOP DET",
+      subtitle: "Telefonen stod pall för hela turneringen och gick därifrån som segrare.",
+      meta: `Din bajslängd: ${localScore}`,
+    };
+  }
+
+  if (winnerReason === ROUND_END_REASONS.soloLoss) {
+    return {
+      variant: "loss",
+      kicker: "SOLOTURNERINGEN ÄR ÖVER",
+      title: "DU SPRACK UPP",
+      subtitle: "Alla tre liv tog slut innan du hann hålla ihop rundan.",
+      meta: `Din bajslängd: ${localScore}`,
+    };
+  }
+
+  if (winnerId && winnerId === multiplayerState.selfId) {
+    return {
+      variant: "winner",
+      kicker: "TURNERING KLAR",
+      title: "#1 BAJS ROYALE",
+      subtitle:
+        winnerReason === ROUND_END_REASONS.lastPlayer
+          ? "Alla andra åkte ut före slutsignalen."
+          : winnerReason === ROUND_END_REASONS.overtime
+            ? "Du tog hem bajsoffen i overtime."
+            : "Du höll längst totalt när rundan tog slut.",
+      meta: `Din bajslängd: ${localScore}`,
+    };
+  }
+
+  return {
+    variant: "default",
+    kicker: "TURNERING KLAR",
+    title: `${winnerName.toUpperCase()} VANN`,
+    subtitle:
+      winnerReason === ROUND_END_REASONS.lastPlayer
+        ? "Det blev bara en contender kvar."
+        : winnerReason === ROUND_END_REASONS.overtime
+          ? "Bajsoffen avgjorde allt i overtime."
+          : "Tiden tog slut och ligan låstes.",
+    meta: `Din bajslängd: ${localScore}`,
+  };
+}
+
+function syncTopHud(now = Date.now()) {
+  if (!topHudEl) {
+    return;
+  }
+
+  const timerHasStarted =
+    Number.isFinite(multiplayerState.matchState.activeStartedAt) &&
+    now >= multiplayerState.matchState.activeStartedAt;
+  const showTopHud =
+    multiplayerState.joined &&
+    !multiplayerState.menuOpen &&
+    multiplayerState.matchState.phase !== MATCH_PHASES.results &&
+    (multiplayerState.matchState.phase === MATCH_PHASES.overtime ||
+      timerHasStarted ||
+      isSpectatorState() ||
+      state.playerPhase === PLAYER_STATES.active);
+
+  topHudEl.classList.toggle("hidden", !showTopHud);
+  if (!showTopHud) {
+    return;
+  }
+
+  const localPlayer = getLocalRosterPlayer();
+  const timerEndsAt =
+    multiplayerState.matchState.phase === MATCH_PHASES.overtime
+      ? multiplayerState.matchState.overtimeEndsAt
+      : timerHasStarted
+        ? multiplayerState.matchState.activeEndsAt
+        : null;
+  const timerText = Number.isFinite(timerEndsAt) ? formatClockFromMs(timerEndsAt - now) : "0:00";
+
+  topHudEl.classList.toggle("top-hud--overtime", multiplayerState.matchState.phase === MATCH_PHASES.overtime);
+  if (topHudTimerEl) {
+    topHudTimerEl.textContent = timerText;
+  }
+  if (topHudContendersEl) {
+    topHudContendersEl.textContent = String(multiplayerState.matchState.remainingContenders ?? 0);
+  }
+  if (topHudLivesEl) {
+    topHudLivesEl.textContent = String(localPlayer?.livesRemaining ?? 0);
+  }
+  if (topHudScoreEl) {
+    topHudScoreEl.textContent = formatMeters(localPlayer?.scoreMeters ?? 0);
+  }
+}
+
+function syncSpectatorOverlay() {
+  if (!spectatorOverlayEl) {
+    return;
+  }
+
+  const showSpectator =
+    multiplayerState.joined &&
+    !multiplayerState.menuOpen &&
+    multiplayerState.matchState.phase !== MATCH_PHASES.results &&
+    isSpectatorState();
+  spectatorOverlayEl.classList.toggle("hidden", !showSpectator);
+  if (!showSpectator) {
+    return;
+  }
+
+  setSpectatorTarget(multiplayerState.spectatorTargetId);
+  const targetId = multiplayerState.spectatorTargetId;
+  const targetPlayer = targetId ? multiplayerState.playerRoster.get(targetId) : null;
+
+  if (spectatorTargetNameEl) {
+    spectatorTargetNameEl.textContent = targetPlayer?.name?.toUpperCase() || "VÄNTAR PÅ SPELARE";
+  }
+  if (spectatorOverlayMetaEl) {
+    spectatorOverlayMetaEl.textContent = targetPlayer
+      ? `${formatMeters(targetPlayer.scoreMeters ?? 0)} · ${targetPlayer.livesRemaining ?? 0} liv kvar · Q / E byter mål`
+      : "Ingen aktiv contender just nu";
+  }
+}
+
+function syncResultsScreen() {
+  if (!resultsScreenEl) {
+    return;
+  }
+
+  const showResults =
+    multiplayerState.joined &&
+    !multiplayerState.menuOpen &&
+    multiplayerState.matchState.phase === MATCH_PHASES.results;
+  resultsScreenEl.classList.toggle("hidden", !showResults);
+
+  if (!showResults) {
+    resultsCardEl?.classList.remove(
+      "results-screen__card--winner",
+      "results-screen__card--samsung",
+      "results-screen__card--loss",
+    );
+    return;
+  }
+
+  const copy = getRoundResultCopy();
+  if (resultsKickerEl) {
+    resultsKickerEl.textContent = copy.kicker;
+  }
+  if (resultsTitleEl) {
+    resultsTitleEl.textContent = copy.title;
+  }
+  if (resultsSubtitleEl) {
+    resultsSubtitleEl.textContent = copy.subtitle;
+  }
+  if (resultsMetaEl) {
+    resultsMetaEl.textContent = copy.meta;
+  }
+
+  resultsCardEl?.classList.toggle("results-screen__card--winner", copy.variant === "winner");
+  resultsCardEl?.classList.toggle("results-screen__card--samsung", copy.variant === "samsung");
+  resultsCardEl?.classList.toggle("results-screen__card--loss", copy.variant === "loss");
+}
+
+function syncRoundUi(now = Date.now()) {
+  syncTopHud(now);
+  syncSpectatorOverlay();
+  syncResultsScreen();
+}
+
 function setRosterPlayers(players = []) {
   multiplayerState.playerRoster.clear();
   players.forEach((player) => {
@@ -1246,12 +1777,15 @@ function removeRosterPlayer(playerId) {
 }
 
 function syncLocalRosterState() {
-  const localPlayer = multiplayerState.playerRoster.get(multiplayerState.selfId);
+  const localPlayer = getLocalRosterPlayer();
   if (!localPlayer) {
     return;
   }
 
   state.localReady = Boolean(localPlayer.ready);
+  if (Number.isFinite(localPlayer.hemorrhoids)) {
+    state.hemorrhoids = localPlayer.hemorrhoids;
+  }
   multiplayerState.selfName = localPlayer.name ?? multiplayerState.selfName;
   setMinecraftAvatarName(hero, multiplayerState.selfName || playerProfile.name || "Du");
   if (localPlayer.skinDataUrl) {
@@ -1262,6 +1796,7 @@ function syncLocalRosterState() {
     syncLocalHeldWeapon();
     syncInventoryHud();
   }
+  syncRoundUi();
 }
 
 function renderLobbyPlayerList() {
@@ -1284,10 +1819,22 @@ function renderLobbyPlayerList() {
     name.textContent = player.id === multiplayerState.selfId ? `${player.name} (du)` : player.name;
 
     const status = document.createElement("span");
-    status.className = `lobby-player__status ${
-      player.ready ? "lobby-player__status--ready" : "lobby-player__status--waiting"
-    }`;
-    status.textContent = player.ready ? "Ready" : "Väntar";
+    let statusClass = "lobby-player__status--waiting";
+    let statusText = "Väntar";
+
+    if (player.isEliminated) {
+      statusClass = "lobby-player__status--waiting";
+      statusText = "Ute";
+    } else if (player.playerPhase === PLAYER_STATES.spectating) {
+      statusClass = "lobby-player__status--waiting";
+      statusText = "Spectate";
+    } else if (player.ready) {
+      statusClass = "lobby-player__status--ready";
+      statusText = "Ready";
+    }
+
+    status.className = `lobby-player__status ${statusClass}`;
+    status.textContent = statusText;
 
     row.append(swatch, name, status);
     lobbyPlayerListEl.append(row);
@@ -1306,6 +1853,15 @@ function getMatchPhaseLabel(phase) {
   }
   if (phase === MATCH_PHASES.active) {
     return "PÅ ÖN";
+  }
+  if (phase === MATCH_PHASES.overtime) {
+    return "BAJSOFF";
+  }
+  if (phase === MATCH_PHASES.results) {
+    return "RESULTAT";
+  }
+  if (phase === PLAYER_STATES.spectating) {
+    return "ÅSKÅDAR";
   }
   return "VÄNTELOBBY";
 }
@@ -1402,15 +1958,15 @@ function syncMatchPanel(now = Date.now()) {
 }
 
 function syncAnnouncementPrompts(now = Date.now()) {
-  const lobbyPhase = multiplayerState.matchState.phase ?? MATCH_PHASES.staging;
+  const hasBusWindow =
+    Number.isFinite(multiplayerState.matchState.doorsOpenAt) &&
+    Number.isFinite(multiplayerState.matchState.busEndsAt) &&
+    now >= multiplayerState.matchState.doorsOpenAt &&
+    now < multiplayerState.matchState.busEndsAt;
   let bannerText = "";
   let showJumpPrompt = false;
 
-  if (
-    lobbyPhase === MATCH_PHASES.bus &&
-    Number.isFinite(multiplayerState.matchState.doorsOpenAt) &&
-    now >= multiplayerState.matchState.doorsOpenAt
-  ) {
+  if (hasBusWindow) {
     bannerText = "DÖRRARNA ÖPPNAS";
     showJumpPrompt = state.playerPhase === MATCH_PHASES.bus;
   }
@@ -1477,7 +2033,8 @@ function updateBattleBusVisual(now = Date.now()) {
   const shouldShow =
     multiplayerState.joined &&
     !multiplayerState.menuOpen &&
-    multiplayerState.matchState.phase === MATCH_PHASES.bus;
+    Number.isFinite(multiplayerState.matchState.busEndsAt) &&
+    now < multiplayerState.matchState.busEndsAt;
   battleBus.group.visible = shouldShow;
   if (!shouldShow) {
     return;
@@ -3919,7 +4476,9 @@ async function refreshLobbySnapshot(silent = false) {
     await multiplayer.fetchLobbies();
   } catch (error) {
     if (!silent || multiplayerState.menuOpen) {
-      updateLobbyMenuStatus("Lobby-status kunde inte hamtas. Kontrollera Worker-URL:en.");
+      updateLobbyMenuStatus(
+        `Lobby-status kunde inte hamtas fran ${multiplayer.origin}. Kontrollera att Workern svarar pa /api/lobbies.`,
+      );
     }
   }
 }
@@ -3965,6 +4524,9 @@ function handleMultiplayerStateChange({ connectionState, lobbyId, reason }) {
     multiplayerState.selfId = null;
     multiplayerState.lobbyId = null;
     multiplayerState.selfName = "";
+    multiplayerState.spectatorTargetId = null;
+    multiplayerState.lastPhaseResyncAt = 0;
+    multiplayerState.lastPoopResyncAt = 0;
     multiplayerState.localActionState = createActionState();
     multiplayerState.matchState = createMatchState();
     multiplayerState.playerRoster.clear();
@@ -3984,7 +4546,10 @@ function handleMultiplayerStateChange({ connectionState, lobbyId, reason }) {
     clearRemotePlayers();
     resetInputState();
     state.localReady = false;
-    state.playerPhase = MATCH_PHASES.staging;
+    state.playerPhase = PLAYER_STATES.staging;
+    state.gameOver = false;
+    hideEliminationOverlay();
+    syncRoundUi();
     setMinecraftAvatarSkin(hero, playerProfile.skinDataUrl);
     setMinecraftAvatarName(hero, playerProfile.name || "Du");
     syncNetworkCard();
@@ -4006,6 +4571,8 @@ function handleLobbyWelcome(message) {
   multiplayerState.selfName = message.name;
   multiplayerState.selfColor = message.color;
   multiplayerState.localActionState = createActionState();
+  multiplayerState.lastPhaseResyncAt = 0;
+  multiplayerState.lastPoopResyncAt = 0;
   multiplayerState.lobbyCounts[message.lobbyId] = message.playerCount ?? 1;
   clearRemotePlayers();
   resetRoundState();
@@ -4072,20 +4639,24 @@ function handleLobbyPresence(message) {
     syncNetworkCard();
   }
 
-  if (!message.player || message.player.id === multiplayerState.selfId) {
+  if (!message.player) {
     return;
   }
 
   if (message.action === "join") {
     upsertRosterPlayer(message.player);
-    queueRemotePose(message.player.id, message.player, message.player.pose);
+    if (message.player.id !== multiplayerState.selfId) {
+      queueRemotePose(message.player.id, message.player, message.player.pose);
+    }
     syncMatchPanel();
     return;
   }
 
   if (message.action === "update") {
     upsertRosterPlayer(message.player);
-    queueRemotePose(message.player.id, message.player, message.player.pose);
+    if (message.player.id !== multiplayerState.selfId) {
+      queueRemotePose(message.player.id, message.player, message.player.pose);
+    }
     syncMatchPanel();
     return;
   }
@@ -4122,25 +4693,40 @@ function applyMatchStateMessage(message) {
     setRosterPlayers(message.players);
   }
 
-  const localPlayer = multiplayerState.playerRoster.get(multiplayerState.selfId);
+  const localPlayer = getLocalRosterPlayer();
   const desiredPlayerPhase =
     localPlayer?.playerPhase ??
     (message.phase === MATCH_PHASES.bus
-      ? MATCH_PHASES.bus
+      ? PLAYER_STATES.bus
       : message.phase === MATCH_PHASES.active
-        ? MATCH_PHASES.active
-        : MATCH_PHASES.staging);
+        ? PLAYER_STATES.active
+        : PLAYER_STATES.staging);
+  const localPose = localPlayer?.pose ?? null;
 
   if (
-    desiredPlayerPhase === MATCH_PHASES.bus &&
+    desiredPlayerPhase === PLAYER_STATES.bus &&
     (state.playerPhase !== MATCH_PHASES.bus ||
       previousMatchState.busStartedAt !== multiplayerState.matchState.busStartedAt)
   ) {
     enterLocalBusPhase(false);
-  } else if (desiredPlayerPhase === MATCH_PHASES.glide && state.playerPhase !== MATCH_PHASES.glide) {
-    enterLocalGlidePhase(false, false);
-  } else if (desiredPlayerPhase === MATCH_PHASES.active && state.playerPhase !== MATCH_PHASES.active) {
-    enterLocalActivePhase(false, state.playerPhase !== MATCH_PHASES.glide);
+  } else if (desiredPlayerPhase === PLAYER_STATES.glide && state.playerPhase !== MATCH_PHASES.glide) {
+    enterLocalGlidePhase(false, false, localPose);
+  } else if (desiredPlayerPhase === PLAYER_STATES.active && state.playerPhase !== MATCH_PHASES.active) {
+    enterLocalActivePhase(false, state.playerPhase !== MATCH_PHASES.glide, localPose);
+  } else if (desiredPlayerPhase === PLAYER_STATES.spectating) {
+    enterLocalSpectatorPhase({
+      preferredTargetId: multiplayerState.spectatorTargetId,
+      title: "ELIMINERAD!",
+      subtitle: "Du väntar på redeploy från luften.",
+      meta: `${localPlayer?.livesRemaining ?? 0} liv kvar`,
+    });
+  } else if (desiredPlayerPhase === PLAYER_STATES.eliminated) {
+    enterLocalEliminatedPhase({
+      preferredTargetId: multiplayerState.spectatorTargetId,
+      title: "UTE UR TURNERINGEN!",
+      subtitle: "Tre liv slut. Du spectatar resten av rundan.",
+      meta: "0 liv kvar",
+    });
   } else if (
     desiredPlayerPhase !== MATCH_PHASES.bus &&
     desiredPlayerPhase !== MATCH_PHASES.glide &&
@@ -4150,8 +4736,79 @@ function applyMatchStateMessage(message) {
     enterLocalStagingPhase(false);
   }
 
+  if (message.phase === MATCH_PHASES.results) {
+    state.gameOver = true;
+    resetInputState();
+    hideEliminationOverlay();
+    setSpectatorTarget(multiplayerState.matchState.winnerPlayerId ?? multiplayerState.spectatorTargetId);
+  }
+
   syncNetworkCard();
   syncMatchPanel();
+  syncRoundUi();
+}
+
+function handleRoundEventMessage(message) {
+  if (!message?.kind || !message.event) {
+    return;
+  }
+
+  if (message.kind === ROUND_EVENT_KINDS.playerDied) {
+    clearOwnedPoop(message.event.targetPlayerId);
+    if (message.event.targetPlayerId === multiplayerState.selfId) {
+      const remainingLives = Math.max(0, message.event.remainingLives ?? 0);
+      if (remainingLives > 0) {
+        const attackerName = message.event.attackerPlayerId
+          ? getPlayerDisplayName(message.event.attackerPlayerId, "En spelare")
+          : "Telefonen";
+        enterLocalSpectatorPhase({
+          preferredTargetId: message.event.attackerPlayerId,
+          title: "DU SPRACK!",
+          subtitle:
+            message.event.cause === "pressure"
+              ? "Hemorojdmätaren slog i taket. Din längd nollades helt."
+              : `${attackerName} skickade upp dig i luften igen.`,
+          meta: `${remainingLives} liv kvar`,
+        });
+      }
+    } else if (multiplayerState.spectatorTargetId === message.event.targetPlayerId) {
+      setSpectatorTarget(message.event.attackerPlayerId);
+    }
+  }
+
+  if (message.kind === ROUND_EVENT_KINDS.playerRespawned) {
+    clearOwnedPoop(message.event.targetPlayerId);
+    if (message.event.targetPlayerId === multiplayerState.selfId) {
+      enterLocalGlidePhase(false, false, message.event.pose ?? null);
+    }
+  }
+
+  if (message.kind === ROUND_EVENT_KINDS.playerEliminated) {
+    clearOwnedPoop(message.event.targetPlayerId);
+    if (message.event.targetPlayerId === multiplayerState.selfId) {
+      enterLocalEliminatedPhase({
+        preferredTargetId: message.event.attackerPlayerId,
+        title: "UTE UR TURNERINGEN!",
+        subtitle: "Tre liv slut. Nu återstår bara spectate.",
+        meta: "0 liv kvar",
+      });
+    } else if (multiplayerState.spectatorTargetId === message.event.targetPlayerId) {
+      setSpectatorTarget(message.event.attackerPlayerId);
+    }
+  }
+
+  if (message.kind === ROUND_EVENT_KINDS.overtimeStarted) {
+    setSpectatorTarget(multiplayerState.spectatorTargetId);
+  }
+
+  if (message.kind === ROUND_EVENT_KINDS.matchEnded) {
+    state.gameOver = true;
+    resetInputState();
+    hideEliminationOverlay();
+    setSpectatorTarget(message.event.winnerPlayerId ?? multiplayerState.spectatorTargetId);
+  }
+
+  syncRoundUi();
 }
 
 function resetRoundState() {
@@ -4197,11 +4854,29 @@ function resetRoundState() {
   poopHoldState.started = false;
   poopHoldState.tapStrikeArmed = false;
   activePoopRope = null;
-  gameOverEl.classList.add("hidden");
+  hideEliminationOverlay();
   hitmarkerEl?.classList.add("hidden");
   lootToastEl?.classList.add("hidden");
   setMuzzleFlashState(weaponRoot, 0);
   updateHud();
+}
+
+function applyPoseToLocalPlayer(pose, fallbackPhase = PLAYER_STATES.active) {
+  if (!pose) {
+    return false;
+  }
+
+  const fallback = getSpawnForPhase(fallbackPhase);
+  state.playerPosition.set(
+    Number.isFinite(pose.x) ? pose.x : fallback.x,
+    Number.isFinite(pose.y) ? pose.y : fallback.y,
+    Number.isFinite(pose.z) ? pose.z : fallback.z,
+  );
+  state.playerYaw = Number.isFinite(pose.yaw) ? pose.yaw : fallback.yaw;
+  state.cameraYaw = state.playerYaw;
+  hero.root.position.copy(state.playerPosition);
+  hero.root.rotation.y = state.playerYaw;
+  return true;
 }
 
 function positionPlayerForPhase(phase, options = {}) {
@@ -4236,61 +4911,119 @@ function positionPlayerForPhase(phase, options = {}) {
 
 function enterLocalStagingPhase(broadcast = true) {
   resetRoundState();
-  state.playerPhase = MATCH_PHASES.staging;
-  positionPlayerForPhase(MATCH_PHASES.staging);
+  state.playerPhase = PLAYER_STATES.staging;
+  state.gameOver = false;
+  multiplayerState.spectatorTargetId = null;
+  positionPlayerForPhase(PLAYER_STATES.staging);
   if (broadcast && multiplayerState.joined) {
-    multiplayer.sendPlayerState(MATCH_PHASES.staging);
+    multiplayer.sendPlayerState(PLAYER_STATES.staging);
   }
   syncMatchPanel();
+  syncRoundUi();
 }
 
 function enterLocalBusPhase(broadcast = true) {
   if (state.playerPhase !== MATCH_PHASES.bus) {
     resetRoundState();
   }
-  state.playerPhase = MATCH_PHASES.bus;
+  state.playerPhase = PLAYER_STATES.bus;
+  state.gameOver = false;
+  multiplayerState.spectatorTargetId = null;
   state.localReady = false;
-  positionPlayerForPhase(MATCH_PHASES.bus);
+  positionPlayerForPhase(PLAYER_STATES.bus);
   if (broadcast && multiplayerState.joined) {
-    multiplayer.sendPlayerState(MATCH_PHASES.bus);
+    multiplayer.sendPlayerState(PLAYER_STATES.bus);
   }
   syncMatchPanel();
+  syncRoundUi();
   if (!isPointerLocked()) {
     canvas.requestPointerLock();
   }
 }
 
-function enterLocalGlidePhase(broadcast = true, isAutoDrop = false) {
+function enterLocalGlidePhase(broadcast = true, isAutoDrop = false, spawnPose = null) {
   const now = Date.now();
   if (state.playerPhase === MATCH_PHASES.bus) {
     positionPlayerForPhase(MATCH_PHASES.bus, { now });
   }
-  state.playerPhase = MATCH_PHASES.glide;
+  state.playerPhase = PLAYER_STATES.glide;
+  state.gameOver = false;
+  hideEliminationOverlay();
   state.grounded = false;
   state.verticalVelocity = -glideConfig.fallSpeed;
   state.glideVelocity.set(0, -glideConfig.fallSpeed, 0);
-  state.playerPosition.y = Math.max(state.playerPosition.y - 1.1, 10);
+  if (spawnPose) {
+    applyPoseToLocalPlayer(spawnPose, PLAYER_STATES.glide);
+  } else {
+    state.playerPosition.y = Math.max(state.playerPosition.y - 1.1, 10);
+  }
   state.autoDropTriggered = isAutoDrop;
   if (broadcast && multiplayerState.joined) {
-    multiplayer.sendPlayerState(MATCH_PHASES.glide);
+    multiplayer.sendPlayerState(PLAYER_STATES.glide);
   }
   syncMatchPanel();
+  syncRoundUi();
 }
 
-function enterLocalActivePhase(broadcast = true, snapToIslandSpawn = false) {
-  if (snapToIslandSpawn || state.playerPhase === MATCH_PHASES.staging || state.playerPhase === MATCH_PHASES.bus) {
-    positionPlayerForPhase(MATCH_PHASES.active);
+function enterLocalActivePhase(broadcast = true, snapToIslandSpawn = false, spawnPose = null) {
+  if (spawnPose) {
+    applyPoseToLocalPlayer(spawnPose, PLAYER_STATES.active);
+  } else if (
+    snapToIslandSpawn ||
+    state.playerPhase === MATCH_PHASES.staging ||
+    state.playerPhase === MATCH_PHASES.bus
+  ) {
+    positionPlayerForPhase(PLAYER_STATES.active);
   }
-  state.playerPhase = MATCH_PHASES.active;
+  state.playerPhase = PLAYER_STATES.active;
+  state.gameOver = false;
+  hideEliminationOverlay();
   state.grounded = true;
   state.verticalVelocity = 0;
   state.playerPosition.y = getSupportHeight(state.playerPosition);
   hero.root.position.copy(state.playerPosition);
   hero.root.rotation.y = state.playerYaw;
   if (broadcast && multiplayerState.joined) {
-    multiplayer.sendPlayerState(MATCH_PHASES.active);
+    multiplayer.sendPlayerState(PLAYER_STATES.active);
   }
   syncMatchPanel();
+  syncRoundUi();
+}
+
+function enterLocalSpectatorPhase({
+  preferredTargetId = null,
+  title = "ELIMINERAD!",
+  subtitle = "Du redeployar snart från luften.",
+  meta = "",
+} = {}) {
+  stopPoopHold();
+  resetInputState();
+  state.playerPhase = PLAYER_STATES.spectating;
+  state.gameOver = true;
+  state.isOnPhone = false;
+  state.grounded = false;
+  clearOwnedPoop(multiplayerState.selfId);
+  setSpectatorTarget(preferredTargetId);
+  showEliminationOverlay({ title, subtitle, meta });
+  syncRoundUi();
+}
+
+function enterLocalEliminatedPhase({
+  preferredTargetId = null,
+  title = "UTE UR TURNERINGEN!",
+  subtitle = "Du spectatar resten av matchen.",
+  meta = "",
+} = {}) {
+  stopPoopHold();
+  resetInputState();
+  state.playerPhase = PLAYER_STATES.eliminated;
+  state.gameOver = true;
+  state.isOnPhone = false;
+  state.grounded = false;
+  clearOwnedPoop(multiplayerState.selfId);
+  setSpectatorTarget(preferredTargetId);
+  showEliminationOverlay({ title, subtitle, meta });
+  syncRoundUi();
 }
 
 function canJumpFromBus(now = Date.now()) {
@@ -4547,24 +5280,16 @@ function handleCombatEventMessage(message) {
     if (message.playerId === multiplayerState.selfId) {
       triggerHitmarker();
     }
+    showPlayerDamageFeedback(
+      message.event.targetPlayerId,
+      message.event.damage,
+      Boolean(message.event.headshot),
+    );
     if (message.event.targetPlayerId === multiplayerState.selfId) {
-      state.hemorrhoids = THREE.MathUtils.clamp(
-        state.hemorrhoids + (message.event.damage ?? 0),
-        0,
-        100,
-      );
+      state.hemorrhoids = THREE.MathUtils.clamp(message.event.nextHemorrhoids ?? state.hemorrhoids, 0, 100);
       updateHud();
     }
     return;
-  }
-
-  if (
-    message.kind === COMBAT_EVENT_KINDS.playerEliminated &&
-    message.event.targetPlayerId === multiplayerState.selfId
-  ) {
-    if (!state.gameOver) {
-      triggerGameOver();
-    }
   }
 }
 
@@ -4597,10 +5322,14 @@ function handleLobbyWorldEvent(message) {
       message.event.velocity?.z ?? 0,
     );
     createImpactBurst(impactPoint, impactVelocity);
+    if (message.playerId === multiplayerState.selfId) {
+      triggerHitmarker();
+    }
+    showPlayerDamageFeedback(message.event.targetPlayerId, message.event.damage, false);
 
     if (message.event.targetPlayerId === multiplayerState.selfId) {
       const attackerName = multiplayerState.playerRoster.get(message.playerId)?.name || "En spelare";
-      applyHandStrikeDamage(attackerName);
+      applyHandStrikeDamage(attackerName, message.event.nextHemorrhoids);
     }
   }
 }
@@ -4621,6 +5350,7 @@ function setMenuOpen(isOpen) {
   lobbyMenuEl.classList.toggle("hidden", !isOpen);
   document.body.classList.toggle("menu-open", isOpen);
   syncMatchPanel();
+  syncRoundUi();
 }
 
 function updateLobbyCounts() {
@@ -4767,6 +5497,7 @@ function ensureRemotePlayer(playerId, playerMeta = null) {
     name: playerMeta?.name ?? "Gast",
     skinDataUrl: playerMeta?.skinDataUrl ?? DEFAULT_SKIN_DATA_URL,
   });
+  ensureAvatarCombatFeedback(avatar);
   const weaponRootGroup = new THREE.Group();
   avatar.weaponAnchor.add(weaponRootGroup);
   remotePlayersRoot.add(avatar.root);
@@ -4881,6 +5612,7 @@ function ensureRemotePoopRope(remotePlayer) {
 
   const anchorPosition = remotePlayer.avatar.buttAnchor.getWorldPosition(tempVecQ).clone();
   remotePlayer.rope = createPoopRope(anchorPosition, {
+    ownerId: remotePlayer.id,
     anchorResolver: () => remotePlayer.avatar.buttAnchor.getWorldPosition(tempVecQ).clone(),
     yawResolver: () => remotePlayer.renderPose?.yaw ?? remotePlayer.avatar.root.rotation.y,
   });
@@ -4913,6 +5645,7 @@ function updateRemotePlayers(delta, now) {
 
     if (remotePlayer.playerPhase === MATCH_PHASES.bus) {
       remotePlayer.avatar.root.visible = false;
+      stopRemotePoopRope(remotePlayer);
       const busPosition = getBusSeatWorldPosition(remotePlayer.guestIndex, Date.now(), tempVecO);
       remotePlayer.renderPose = {
         x: busPosition.x,
@@ -4922,6 +5655,15 @@ function updateRemotePlayers(delta, now) {
         moveAmount: 0,
       };
       updateRemotePlayerAvatar(remotePlayer.avatar, remotePlayer.renderPose, delta);
+      stopRemotePoopRope(remotePlayer);
+      continue;
+    }
+
+    if (
+      remotePlayer.playerPhase === PLAYER_STATES.spectating ||
+      remotePlayer.playerPhase === PLAYER_STATES.eliminated
+    ) {
+      remotePlayer.avatar.root.visible = false;
       stopRemotePoopRope(remotePlayer);
       continue;
     }
@@ -4983,6 +5725,7 @@ function updateRemotePlayers(delta, now) {
       },
       delta,
     );
+    updateAvatarCombatFeedback(remotePlayer.avatar, delta);
   }
 }
 
@@ -4996,12 +5739,47 @@ function createLocalPosePacket() {
   };
 }
 
+function attemptLocalRoundStateResync() {
+  if (!multiplayerState.joined || !multiplayerState.selfId) {
+    return;
+  }
+
+  const selfPlayer = getLocalRosterPlayer();
+  if (!selfPlayer) {
+    return;
+  }
+
+  const now = Date.now();
+  const desiredPhase = state.playerPhase;
+  const serverPhase = selfPlayer.playerPhase;
+  const canResyncPhase =
+    desiredPhase === PLAYER_STATES.bus ||
+    desiredPhase === PLAYER_STATES.glide ||
+    desiredPhase === PLAYER_STATES.active;
+  if (canResyncPhase && serverPhase !== desiredPhase && now - multiplayerState.lastPhaseResyncAt >= 260) {
+    multiplayer.sendPlayerState(desiredPhase);
+    multiplayerState.lastPhaseResyncAt = now;
+  }
+
+  const serverPoopActive = Boolean(selfPlayer.actionState?.poopActive);
+  if (
+    desiredPhase === PLAYER_STATES.active &&
+    multiplayerState.localActionState.poopActive &&
+    !serverPoopActive &&
+    now - multiplayerState.lastPoopResyncAt >= 260
+  ) {
+    multiplayer.sendAction(ACTION_KINDS.poopStart);
+    multiplayerState.lastPoopResyncAt = now;
+  }
+}
+
 function updateMultiplayer(now) {
   if (!multiplayerState.joined) {
     return;
   }
 
   multiplayer.tick(now, createLocalPosePacket());
+  attemptLocalRoundStateResync();
 }
 
 function lerpAngle(from, to, amount) {
@@ -5056,6 +5834,17 @@ function onKeyDown(event) {
     return;
   }
 
+  if (!event.repeat && isSpectatorState()) {
+    if (isKeyboardAction(event, "KeyQ", "q")) {
+      cycleSpectatorTarget(-1);
+      return;
+    }
+    if (isKeyboardAction(event, "KeyE", "e")) {
+      cycleSpectatorTarget(1);
+      return;
+    }
+  }
+
   if (isKeyboardAction(event, "KeyW", "w")) {
     input.forward = true;
   }
@@ -5076,15 +5865,20 @@ function onKeyDown(event) {
       }
       return;
     }
-    if (state.playerPhase === MATCH_PHASES.active && !state.gameOver && state.grounded) {
+    if (state.playerPhase === MATCH_PHASES.active && !state.gameOver && isRoundActionPhase() && state.grounded) {
       state.verticalVelocity = heroMetrics.jumpVelocity;
       state.grounded = false;
     }
   }
-  if (isKeyboardAction(event, "KeyF", "f") && state.playerPhase === MATCH_PHASES.active) {
+  if (isKeyboardAction(event, "KeyF", "f") && state.playerPhase === MATCH_PHASES.active && isRoundActionPhase()) {
     performStrike();
   }
-  if (isKeyboardAction(event, "KeyE", "e") && state.playerPhase === MATCH_PHASES.active && !event.repeat) {
+  if (
+    isKeyboardAction(event, "KeyE", "e") &&
+    state.playerPhase === MATCH_PHASES.active &&
+    isRoundActionPhase() &&
+    !event.repeat
+  ) {
     interactState.keyDown = true;
     interactState.pressBuffer = 0.24;
     beginInteraction();
@@ -5097,9 +5891,6 @@ function onKeyDown(event) {
   }
   if (event.code === "Digit3") {
     selectWeaponSlot(2);
-  }
-  if (event.code === "KeyR" && state.gameOver) {
-    resetRound();
   }
 }
 
@@ -5182,6 +5973,10 @@ function onPointerDown(event) {
       setMessage("Håll i dig. Space används för att hoppa när dörrarna öppnas.");
     } else if (state.playerPhase === MATCH_PHASES.glide) {
       setMessage("Ingen bajsning i luften. Segla ner och landa först.");
+    } else if (isSpectatorState()) {
+      setMessage("Du spectatar just nu. Q och E byter spelare.");
+    } else if (multiplayerState.matchState.phase === MATCH_PHASES.results) {
+      setMessage("Rundan är avgjord. Vänta på resultatet eller lämna lobbyn.");
     }
     return;
   }
@@ -5243,6 +6038,10 @@ function onMouseWheel(event) {
     return;
   }
 
+  if (multiplayerState.matchState.phase === MATCH_PHASES.results) {
+    return;
+  }
+
   event.preventDefault();
   const direction = event.deltaY > 0 ? 1 : -1;
   const nextSlot = (weaponState.equippedSlot + direction + WEAPON_SLOT_COUNT) % WEAPON_SLOT_COUNT;
@@ -5295,13 +6094,18 @@ function onPointerLockChange() {
   if (locked) {
     isPaused = false;
     if (pauseMenuEl) pauseMenuEl.classList.add("hidden");
-    setMessage("Musen är låst. Vrid runt och klicka!");
+    setMessage(isSpectatorState() ? "Åskådarläge aktivt. Vrid kameran och använd Q / E för att byta spelare." : "Musen är låst. Vrid runt och klicka!");
     return;
   }
 
   stopPoopHold();
   
-  if (multiplayerState.joined && !multiplayerState.menuOpen && !state.gameOver) {
+  if (
+    multiplayerState.joined &&
+    !multiplayerState.menuOpen &&
+    !state.gameOver &&
+    multiplayerState.matchState.phase !== MATCH_PHASES.results
+  ) {
     isPaused = true;
     if (pauseMenuEl) pauseMenuEl.classList.remove("hidden");
   } else if (!isPaused) {
@@ -5363,7 +6167,9 @@ function updatePoopHold(delta) {
 
   poopHoldState.started = true;
   poopHoldState.tapStrikeArmed = false;
-  activePoopRope = createPoopRope(hero.buttAnchor.getWorldPosition(tempVecA).clone());
+  activePoopRope = createPoopRope(hero.buttAnchor.getWorldPosition(tempVecA).clone(), {
+    ownerId: multiplayerState.selfId ?? "_local",
+  });
   poopRopes.push(activePoopRope);
   trimPoopRopes();
   setLocalPoopActive(true);
@@ -5885,12 +6691,20 @@ function getMoveIntent() {
 }
 
 function updatePlayer(delta) {
-  hero.root.visible = state.playerPhase !== MATCH_PHASES.bus;
+  hero.root.visible = state.playerPhase !== MATCH_PHASES.bus && !isSpectatorState();
 
   if (activePoopRope) {
     state.poopAnimation = Math.min(0.34, state.poopAnimation + delta * 1.8);
   } else {
     state.poopAnimation = Math.max(0, state.poopAnimation - delta);
+  }
+
+  if (isSpectatorState()) {
+    stopPoopHold();
+    state.moveAmount = THREE.MathUtils.lerp(state.moveAmount, 0, 1 - Math.exp(-delta * 8));
+    state.isOnPhone = false;
+    weaponRoot.visible = false;
+    return;
   }
 
   if (state.gameOver) {
@@ -6208,6 +7022,52 @@ function updateCamera(delta) {
     return;
   }
 
+  if (isSpectatorState() || multiplayerState.matchState.phase === MATCH_PHASES.results) {
+    const preferredTargetId =
+      multiplayerState.matchState.phase === MATCH_PHASES.results
+        ? multiplayerState.matchState.winnerPlayerId ?? multiplayerState.spectatorTargetId
+        : multiplayerState.spectatorTargetId;
+    const spectatingSelf = preferredTargetId === multiplayerState.selfId;
+    const resolvedTargetId = spectatingSelf ? preferredTargetId : resolveSpectatorTargetId(preferredTargetId);
+    if (resolvedTargetId && !spectatingSelf) {
+      multiplayerState.spectatorTargetId = resolvedTargetId;
+    }
+
+    const spectatedRemotePlayer = resolvedTargetId
+      ? multiplayerState.remotePlayers.get(resolvedTargetId)
+      : null;
+
+    if (spectatedRemotePlayer?.avatar?.root.visible || spectatingSelf) {
+      const targetPosition = spectatingSelf
+        ? hero.root.position
+        : spectatedRemotePlayer.avatar.root.getWorldPosition(tempVecA);
+      const targetYaw = spectatingSelf
+        ? state.playerYaw
+        : spectatedRemotePlayer.renderPose?.yaw ?? spectatedRemotePlayer.avatar.root.rotation.y;
+      const followDirection = tempVecB.set(-Math.sin(targetYaw), 0, -Math.cos(targetYaw));
+      const desiredPosition = tempVecC
+        .copy(targetPosition)
+        .addScaledVector(followDirection, 5.6)
+        .add(tempVecD.set(0, 2.9, 0));
+      const lookTarget = tempVecE.copy(targetPosition).add(tempVecF.set(0, 1.2, 0));
+      camera.position.lerp(desiredPosition, 1 - Math.exp(-delta * 5.5));
+      camera.lookAt(lookTarget);
+      return;
+    }
+
+    const orbitAngle = clock.elapsedTime * 0.18;
+    const orbitCenter = tempVecA.set(world.phoneCenter.x, 0, world.phoneCenter.z);
+    const orbitPosition = tempVecB.set(
+      orbitCenter.x + Math.cos(orbitAngle) * 28,
+      15.5,
+      orbitCenter.z + Math.sin(orbitAngle) * 22,
+    );
+    const orbitLookTarget = tempVecC.set(orbitCenter.x, 3.4, orbitCenter.z);
+    camera.position.lerp(orbitPosition, 1 - Math.exp(-delta * 2.4));
+    camera.lookAt(orbitLookTarget);
+    return;
+  }
+
   if (state.playerPhase === MATCH_PHASES.bus) {
     const transform = getBusTransform(Date.now());
     const busCamDistance = 9.5;
@@ -6332,7 +7192,7 @@ function updateStandingTarget(delta) {
 }
 
 function updateAimMarker() {
-  if (state.playerPhase !== MATCH_PHASES.active) {
+  if (state.playerPhase !== MATCH_PHASES.active || !isRoundActionPhase() || state.gameOver) {
     aimMarker.visible = false;
     return;
   }
@@ -6466,6 +7326,7 @@ function createPoopRope(anchorPosition, options = {}) {
     points: [],
     baseMesh,
     slimeMesh,
+    ownerId: options.ownerId ?? null,
     anchorPosition: anchorPosition.clone(),
     anchorResolver: options.anchorResolver ?? null,
     yawResolver: options.yawResolver ?? null,
@@ -6881,16 +7742,10 @@ function registerTargetHit(impactPoint, velocity, options = {}) {
     });
   }
 
-
-  state.hemorrhoids = THREE.MathUtils.clamp(
-    state.hemorrhoids - (6 + hitForce * 0.8),
-    0,
-    100,
-  );
   setMessage(
-    state.hemorrhoids > 0
-      ? "Klockren smäll. Han gungar till där ute i öknen och hemorojdrisken sjunker."
-      : "Perfekt smocka. All press släppte för stunden.",
+    hitForce > 1.6
+      ? "Klockren smäll. Han gungar till där ute i öknen."
+      : "Perfekt smocka. Han tog träffen rakt i sidan.",
   );
   updateHud();
 }
@@ -6909,30 +7764,23 @@ function registerPlayerHit(hit, options = {}) {
   setMessage(`Smack. Du traffade ${targetName} med handen.`);
 }
 
-function applyHandStrikeDamage(attackerName = "En spelare") {
+function applyHandStrikeDamage(attackerName = "En spelare", nextHemorrhoids = state.hemorrhoids) {
   if (state.gameOver || state.playerPhase !== MATCH_PHASES.active) {
     return;
   }
 
-  state.hemorrhoids = THREE.MathUtils.clamp(
-    state.hemorrhoids + handStrikeConfig.hemorrhoidDamage,
-    0,
-    100,
-  );
+  state.hemorrhoids = THREE.MathUtils.clamp(nextHemorrhoids, 0, 100);
   setMessage(`${attackerName} traffade dig med handen. Hemorojdrisken okade lite.`);
   updateHud();
 }
 
 function updateHemorrhoids(delta) {
-  if (state.gameOver) {
-    state.resetTimer -= delta;
-    if (state.resetTimer <= 0) {
-      resetRound();
-    }
-    return;
-  }
-
-  if (state.playerPhase !== MATCH_PHASES.active) {
+  if (
+    state.playerPhase !== MATCH_PHASES.active ||
+    !isRoundActionPhase() ||
+    isSpectatorState() ||
+    multiplayerState.matchState.phase === MATCH_PHASES.results
+  ) {
     dangerRing.userData.fill.material.opacity = 0.18;
     dangerRing.userData.outline.material.emissiveIntensity = 0.62;
     dangerRing.scale.setScalar(1);
@@ -6947,29 +7795,11 @@ function updateHemorrhoids(delta) {
     0,
     0.4,
   );
-  const pressure = state.isOnPhone ? 1 : nearbyPressure;
-
-  if (state.isOnPhone) {
-    state.hemorrhoids = THREE.MathUtils.clamp(
-      state.hemorrhoids + delta * 17.0,
-      0,
-      100,
-    );
-  } else if (nearbyPressure > 0) {
-    state.hemorrhoids = THREE.MathUtils.clamp(
-      state.hemorrhoids + delta * (2.0 + nearbyPressure * 9.0),
-      0,
-      100,
-    );
-  }
+  const pressure = Math.max(state.isOnPhone ? 1 : nearbyPressure, state.hemorrhoids / 100);
 
   dangerRing.userData.fill.material.opacity = 0.35 + pressure * 0.2 + Math.sin(clock.elapsedTime * 4) * 0.05;
   dangerRing.userData.outline.material.emissiveIntensity = 0.8 + pressure * 0.4 + Math.sin(clock.elapsedTime * 4) * 0.15;
   dangerRing.scale.setScalar(1 + pressure * 0.06);
-
-  if (state.hemorrhoids >= 100) {
-    triggerGameOver();
-  }
 }
 
 function createImpactBurst(position, velocity) {
@@ -7057,13 +7887,6 @@ function updateImpactBursts(delta) {
   }
 }
 
-function triggerGameOver() {
-  state.gameOver = true;
-  state.resetTimer = 2.6;
-  setMessage("Game over. Du stod och tryckte för länge på telefonen och sprack upp helt.");
-  gameOverEl.classList.remove("hidden");
-}
-
 function measureRopeLength(rope) {
   if (!rope || rope.points.length < 2) {
     return 0;
@@ -7128,38 +7951,40 @@ function renderLeaderboard() {
     return;
   }
 
-  const isActive = state.playerPhase === MATCH_PHASES.active ||
-    state.playerPhase === MATCH_PHASES.glide;
-  if (!isActive || !multiplayerState.joined) {
+  const shouldShowLeaderboard =
+    multiplayerState.joined &&
+    !multiplayerState.menuOpen &&
+    multiplayerState.matchState.phase !== MATCH_PHASES.results &&
+    (isRoundActionPhase() || isSpectatorState() || state.playerPhase === PLAYER_STATES.active);
+  if (!shouldShowLeaderboard) {
     leaderboardEl.classList.add("hidden");
     return;
   }
   leaderboardEl.classList.remove("hidden");
 
-  const entries = [];
+  const entries = Array.from(multiplayerState.playerRoster.values())
+    .filter((player) => player.roundParticipant)
+    .sort((first, second) => {
+      if ((second.scoreMeters ?? 0) !== (first.scoreMeters ?? 0)) {
+        return (second.scoreMeters ?? 0) - (first.scoreMeters ?? 0);
+      }
+      if ((second.livesRemaining ?? 0) !== (first.livesRemaining ?? 0)) {
+        return (second.livesRemaining ?? 0) - (first.livesRemaining ?? 0);
+      }
+      if ((first.hemorrhoids ?? 0) !== (second.hemorrhoids ?? 0)) {
+        return (first.hemorrhoids ?? 0) - (second.hemorrhoids ?? 0);
+      }
+      return (first.guestIndex ?? 0) - (second.guestIndex ?? 0);
+    })
+    .map((player) => ({
+      id: player.id,
+      name: player.name || "Spelare",
+      skinDataUrl: player.skinDataUrl || DEFAULT_SKIN_DATA_URL,
+      length: player.scoreMeters ?? 0,
+      isSelf: player.id === multiplayerState.selfId,
+    }));
 
-  const localLength = getLocalTotalPoopLength();
-  state.totalPoopLength = localLength;
-  const localSkin = playerProfile.skinDataUrl || DEFAULT_SKIN_DATA_URL;
-  entries.push({
-    id: multiplayerState.selfId || "_local",
-    name: multiplayerState.selfName || playerProfile.name || "Du",
-    skinDataUrl: localSkin,
-    length: localLength,
-    isSelf: true,
-  });
-
-  for (const [id, rp] of multiplayerState.remotePlayers) {
-    entries.push({
-      id,
-      name: rp.name || "Spelare",
-      skinDataUrl: rp.skinDataUrl || DEFAULT_SKIN_DATA_URL,
-      length: getRemotePoopLength(rp),
-      isSelf: false,
-    });
-  }
-
-  entries.sort((a, b) => b.length - a.length);
+  state.totalPoopLength = getLocalRosterPlayer()?.scoreMeters ?? 0;
 
   const existingChildren = leaderboardEntriesEl.children;
   while (existingChildren.length > entries.length) {
@@ -7209,10 +8034,7 @@ function renderLeaderboard() {
       nameEl.textContent = displayName;
     }
 
-    const lengthValue = entry.length < 10
-      ? entry.length.toFixed(1)
-      : Math.round(entry.length).toString();
-    const lengthDisplay = `${lengthValue}m`;
+    const lengthDisplay = formatMeters(entry.length);
     if (lengthEl.textContent !== lengthDisplay) {
       lengthEl.textContent = lengthDisplay;
     }
@@ -7220,6 +8042,10 @@ function renderLeaderboard() {
 }
 
 function updateHud() {
+  const localPlayer = getLocalRosterPlayer();
+  if (localPlayer && Number.isFinite(localPlayer.hemorrhoids)) {
+    state.hemorrhoids = localPlayer.hemorrhoids;
+  }
   const hemorrhoidPercent = Math.round(state.hemorrhoids);
   const nextMeterText = `${hemorrhoidPercent}%`;
   if (meterTextEl.textContent !== nextMeterText) {
@@ -7227,6 +8053,7 @@ function updateHud() {
     meterFillEl.style.width = nextMeterText;
   }
   renderLeaderboard();
+  syncRoundUi();
 }
 
 function setMessage() {}
@@ -7350,6 +8177,7 @@ function animate() {
   updatePoopRopes(delta);
   updateProjectiles(delta);
   updateRemotePlayers(delta, now);
+  updateAvatarCombatFeedback(hero, delta);
   updateMultiplayer(now);
   updateSmoke(delta);
   updateImpactBursts(delta);

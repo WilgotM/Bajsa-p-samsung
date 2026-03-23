@@ -21,10 +21,26 @@ export const COUNTDOWN_DURATION_MS = 10_000;
 export const BUS_FLIGHT_DURATION_MS = 28_000;
 export const BUS_DOORS_OPEN_OFFSET_MS = 2_500;
 export const BUS_AUTO_DROP_OFFSET_MS = 24_000;
+export const ROUND_ACTIVE_DURATION_MS = 180_000;
+export const ROUND_OVERTIME_DURATION_MS = 20_000;
+export const ROUND_RESULTS_DURATION_MS = 8_000;
+export const PLAYER_RESPAWN_DELAY_MS = 2_500;
+export const PLAYER_LIVES = 3;
 export const WEAPON_SLOT_COUNT = 3;
 export const TOILET_SEARCH_DURATION_MS = 850;
 export const TOILET_INTERACT_RANGE = 4.6;
 export const GROUND_LOOT_PICKUP_RANGE = 3.6;
+export const POOP_SCORE_METERS_PER_SECOND = 2.88;
+export const PHONE_PRESSURE_NEARBY_OUTER_RADIUS = 9.2;
+export const PHONE_PRESSURE_NEARBY_INNER_RADIUS = 2.8;
+export const PHONE_PRESSURE_NEARBY_MAX = 0.4;
+export const PHONE_HEMORRHOIDS_ON_PHONE_PER_SECOND = 17;
+export const PHONE_HEMORRHOIDS_NEARBY_BASE_PER_SECOND = 2;
+export const PHONE_HEMORRHOIDS_NEARBY_EXTRA_PER_SECOND = 9;
+export const PHONE_STAND_BOUNDS = Object.freeze({
+  halfX: 3.1 * 0.49,
+  halfZ: 6.8 * 0.49,
+});
 
 export const MATCH_PHASES = Object.freeze({
   staging: "staging",
@@ -32,6 +48,33 @@ export const MATCH_PHASES = Object.freeze({
   bus: "bus",
   glide: "glide",
   active: "active",
+  overtime: "overtime",
+  results: "results",
+});
+
+export const PLAYER_STATES = Object.freeze({
+  staging: MATCH_PHASES.staging,
+  bus: MATCH_PHASES.bus,
+  glide: MATCH_PHASES.glide,
+  active: MATCH_PHASES.active,
+  spectating: "spectating",
+  eliminated: "eliminated",
+});
+
+export const ROUND_END_REASONS = Object.freeze({
+  lastPlayer: "last-player",
+  time: "time",
+  overtime: "overtime",
+  samsungSurvived: "samsung-survived",
+  soloLoss: "solo-loss",
+});
+
+export const ROUND_EVENT_KINDS = Object.freeze({
+  playerDied: "player-died",
+  playerRespawned: "player-respawned",
+  playerEliminated: "player-eliminated",
+  overtimeStarted: "overtime-started",
+  matchEnded: "match-ended",
 });
 
 export const PLAYER_SPAWN = Object.freeze({
@@ -145,16 +188,16 @@ export const WEAPON_DEFINITIONS = Object.freeze({
   [WEAPON_TYPES.shotgun]: Object.freeze({
     fireRate: 0.85,
     damage: Object.freeze({
-      [WEAPON_RARITIES.gray]: 9,
-      [WEAPON_RARITIES.green]: 10,
-      [WEAPON_RARITIES.blue]: 11,
-      [WEAPON_RARITIES.purple]: 12,
+      [WEAPON_RARITIES.gray]: 12,
+      [WEAPON_RARITIES.green]: 13,
+      [WEAPON_RARITIES.blue]: 14,
+      [WEAPON_RARITIES.purple]: 15,
     }),
     spread: Object.freeze({
-      [WEAPON_RARITIES.gray]: 0.16,
-      [WEAPON_RARITIES.green]: 0.148,
-      [WEAPON_RARITIES.blue]: 0.136,
-      [WEAPON_RARITIES.purple]: 0.124,
+      [WEAPON_RARITIES.gray]: 0.12,
+      [WEAPON_RARITIES.green]: 0.112,
+      [WEAPON_RARITIES.blue]: 0.104,
+      [WEAPON_RARITIES.purple]: 0.096,
     }),
     recoilKick: Object.freeze({
       [WEAPON_RARITIES.gray]: 0.028,
@@ -162,7 +205,7 @@ export const WEAPON_DEFINITIONS = Object.freeze({
       [WEAPON_RARITIES.blue]: 0.024,
       [WEAPON_RARITIES.purple]: 0.022,
     }),
-    maxRange: 19,
+    maxRange: 22,
     impactScale: 1.25,
     pellets: 8,
   }),
@@ -287,6 +330,13 @@ export function createMatchState() {
     doorsOpenAt: null,
     autoDropAt: null,
     busEndsAt: null,
+    activeStartedAt: null,
+    activeEndsAt: null,
+    overtimeEndsAt: null,
+    resultsEndsAt: null,
+    remainingContenders: 0,
+    winnerPlayerId: null,
+    winnerReason: "",
   };
 }
 
@@ -296,8 +346,8 @@ export function getBusSchedule(busStartedAt) {
   }
 
   return {
+    ...createMatchState(),
     phase: MATCH_PHASES.bus,
-    countdownEndsAt: null,
     busStartedAt,
     doorsOpenAt: busStartedAt + BUS_DOORS_OPEN_OFFSET_MS,
     autoDropAt: busStartedAt + BUS_AUTO_DROP_OFFSET_MS,
@@ -311,6 +361,10 @@ export function isValidLobbyId(lobbyId) {
 
 export function isValidMatchPhase(phase) {
   return Object.values(MATCH_PHASES).includes(phase);
+}
+
+export function isValidPlayerState(phase) {
+  return Object.values(PLAYER_STATES).includes(phase);
 }
 
 export function sanitizePlayerName(name, fallbackName = "") {

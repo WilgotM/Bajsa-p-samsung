@@ -54,6 +54,7 @@ export class MultiplayerClient {
     onLoadoutState = () => {},
     onCombatEvent = () => {},
     onWorldEvent = () => {},
+    onRoundEvent = () => {},
     onError = () => {},
   } = {}) {
     this.origin = origin;
@@ -69,6 +70,7 @@ export class MultiplayerClient {
     this.onLoadoutState = onLoadoutState;
     this.onCombatEvent = onCombatEvent;
     this.onWorldEvent = onWorldEvent;
+    this.onRoundEvent = onRoundEvent;
     this.onError = onError;
 
     this.ws = null;
@@ -235,6 +237,11 @@ export class MultiplayerClient {
 
     if (message.type === "world-event") {
       this.onWorldEvent(message);
+      return;
+    }
+
+    if (message.type === "round-event") {
+      this.onRoundEvent(message);
       return;
     }
 
